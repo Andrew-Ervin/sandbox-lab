@@ -24,6 +24,10 @@ class Previews:
         target['expires']=time.time()+self.idle_seconds;return True
     def active_workspaces(self):
         return {t['workspace_id'] for t in preview.targets.values() if t.get('workspace_id') and t['expires']>time.time()}
+    async def remove_workspace(self,wid):
+        async with self.lock:
+            for port,target in list(preview.targets.items()):
+                if target.get('workspace_id')==wid:await self.remove(port)
     async def remove(self,port):
         resource=self.resources.pop(port,None);preview.targets.pop(port,None)
         self.app_ports={k:v for k,v in self.app_ports.items() if urlsplit(v).port!=port}

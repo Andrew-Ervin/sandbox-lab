@@ -90,3 +90,74 @@ def test_widget_keeps_client_action_and_embeds_png(tmp_path,monkeypatch):
     buttons=widget['children'][-1]['children']
     assert {b['onClickAction']['type'] for b in buttons}=={'open_artifact','download_artifact'}
     assert all(b['onClickAction']['handler']=='client' and b['onClickAction']['payload']['run_id']=='run_chart' for b in buttons)
+
+@pytest.mark.asyncio
+async def test_queued_chat_acknowledges_user_before_worker_is_available(tmp_path,monkeypatch):
+    store=SQLiteStore(tmp_path/'db');chat=LabChat(store);jobs=Jobs(store,concurrency=1)
+    await jobs.slots.acquire()
+    completion_started=False
+    async def completion(*args,**kwargs):
+        nonlocal completion_started
+        completion_started=True
+        return {'role':'assistant','content':'Done'}
+    monkeypatch.setattr(chat,'completion',completion)
+    context={'owner':'local-owner','mode':'auto'}
+    request={'type':'threads.create','params':{'input':{'content':[{'type':'input_text','text':'Queued test'}],'attachments':[],'inference_options':{}}}}
+    result=await chat.process(json.dumps(request).encode(),context)
+    sub=jobs.start(result,context,acknowledge=True)
+    events=[json.loads((await asyncio.wait_for(anext(sub),.5))[6:]) for _ in range(3)]
+    assert [e['type'] for e in events]==['thread.created','thread.item.done','stream_options']
+    assert events[1]['item']['type']=='user_message' and not completion_started
+    assert jobs.active('local-owner',events[0]['thread']['id'])
+    jobs.slots.release()
+    await asyncio.gather(*list(jobs.tasks.values()));await sub.aclose();await chat.close()
+
+@pytest.mark.asyncio
+async def test_background_turn_uses_native_locked_status_only_in_read_response(monkeypatch):
+    from backend import main
+    from chatkit.server import NonStreamingResult
+    from starlette.requests import Request
+    from unittest.mock import AsyncMock
+    body=json.dumps({'type':'threads.get_by_id','params':{'thread_id':'synthetic'}}).encode()
+    async def receive():return {'type':'http.request','body':body,'more_body':False}
+    request=Request({'type':'http','method':'POST','path':'/api/chatkit','headers':[],'state':{'owner':'local-owner'}},receive)
+    original=b'{"id":"synthetic","status":{"type":"active"},"items":{"data":[]}}'
+    monkeypatch.setattr(main.chat_server,'process',AsyncMock(return_value=NonStreamingResult(original)))
+    monkeypatch.setattr(main.jobs,'active',lambda *args:[{'id':'running'}])
+    response=await main.chatkit(request)
+    assert json.loads(response.body)['status']['type']=='locked'
+    assert json.loads(original)['status']['type']=='active'
+
+@pytest.mark.asyncio
+async def test_router_200_rate_limit_retries_before_any_tool_is_returned(monkeypatch):
+    import httpx
+    import backend.chat as module
+    replies=iter([{'error':{'code':429}}, {'choices':[{'message':{'role':'assistant','content':'Recovered'}}]}])
+    calls=[]
+    def handler(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(200,json=next(replies))
+    monkeypatch.setattr(module,'API_KEY','synthetic-key')
+    monkeypatch.setattr(module.asyncio,'sleep',__import__('unittest.mock',fromlist=['AsyncMock']).AsyncMock())
+    chat=LabChat(SQLiteStore(':memory:'))
+    chat.http=httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    assert (await chat.completion([{'role':'user','content':'hello'}],tools=False))['content']=='Recovered'
+    assert len(calls)==2 and calls[0]==calls[1]
+    assert calls[0]['max_tokens']==4096
+    await chat.close()
+
+
+@pytest.mark.asyncio
+async def test_placeholder_title_can_receive_a_message_without_invalid_thread_event(tmp_path,monkeypatch):
+    store=SQLiteStore(tmp_path/'db'); chat=LabChat(store)
+    context={'owner':'local-owner','mode':'auto'}
+    await store.save_thread(ThreadMetadata(id='placeholder',title='New conversation',created_at=datetime.now(timezone.utc)),context)
+    async def completion(*args,**kwargs): return {'role':'assistant','content':'Ready'}
+    monkeypatch.setattr(chat,'completion',completion)
+    monkeypatch.setattr(chat.titles,'schedule',lambda *args:None)
+    request={'type':'threads.add_user_message','params':{'thread_id':'placeholder','input':{'content':[{'type':'input_text','text':'Continue'}],'attachments':[],'inference_options':{}}}}
+    response=await chat.process(json.dumps(request).encode(),context)
+    events=[json.loads(chunk[6:]) async for chunk in response]
+    assert not any(e['type']=='error' for e in events)
+    assert any(e.get('item',{}).get('content',[{}])[0].get('text')=='Ready' for e in events if e.get('item',{}).get('type')=='assistant_message')
+    await chat.close()

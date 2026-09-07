@@ -1479,7 +1479,41 @@
 
   restoreState();
   vscode.postMessage({ type: 'ready' });
-  // LAB_DICTATION: opt-in recording, editable transcript, no automatic chat send.
+    // LAB_DICTATION: opt-in recording, editable transcript, no automatic chat send.
+const LAB_VOICE_SECONDS=300,LAB_VOICE_BYTES=10000000;
+// Encode the browser recording as the provider-tested mono PCM WAV format.
+function labEncodeWav(samples) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const label = (offset, value) => {
+    for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i));
+  };
+  label(0, 'RIFF'); view.setUint32(4, buffer.byteLength - 8, true);
+  label(8, 'WAVE'); label(12, 'fmt '); view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, 16000, true); view.setUint32(28, 32000, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  label(36, 'data'); view.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) {
+    const sample = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(44 + i * 2, sample < 0 ? sample * 32768 : sample * 32767, true);
+  }
+  return buffer;
+}
+
+async function labRecordingWav(blob) {
+  const context = new AudioContext();
+  let decoded;
+  try { decoded = await context.decodeAudioData(await blob.arrayBuffer()); }
+  finally { await context.close(); }
+  if (!decoded.length || decoded.duration > LAB_VOICE_SECONDS + 2) throw Error('Recording exceeds the dictation time limit.');
+  const renderer = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+  const source = renderer.createBufferSource(); source.buffer = decoded;
+  source.connect(renderer.destination); source.start();
+  const audio = await renderer.startRendering();
+  return new Blob([labEncodeWav(audio.getChannelData(0))], {type: 'audio/wav'});
+}
+
   const mic = document.createElement('button');
   mic.id='btn-mic'; mic.className='icon-button'; mic.type='button';
   mic.title='Dictate with OpenRouter (ZDR)'; mic.setAttribute('aria-label','Start dictation');
@@ -1502,15 +1536,24 @@
       const mime=['audio/webm;codecs=opus','audio/ogg;codecs=opus','audio/mp4'].find(t=>MediaRecorder.isTypeSupported(t));
       if(!mime)throw new Error('No supported recording format in this browser.');
       recorder=new MediaRecorder(stream,{mimeType:mime,audioBitsPerSecond:64000});voiceChunks=[];voiceBytes=0;
-      recorder.ondataavailable=e=>{if(e.data.size){voiceBytes+=e.data.size;if(voiceBytes>4000000){cancelVoice();voiceMessage('Recording too large. Try a shorter clip.');return;}voiceChunks.push(e.data);}};
+      recorder.ondataavailable=e=>{if(e.data.size){voiceBytes+=e.data.size;if(voiceBytes>LAB_VOICE_BYTES){cancelVoice();voiceMessage('Recording too large. Try a shorter clip.');return;}voiceChunks.push(e.data);}};
       recorder.onerror=()=>{cancelVoice();voiceMessage('Recording failed. Try again.');};
       recorder.onstop=async()=>{
         releaseVoice();if(voiceCancelled||id!==voiceId)return;
         mic.disabled=true;voiceMessage('Transcribing with OpenRouter · ZDR…');
         const blob=new Blob(voiceChunks,{type:mime});voiceChunks=[];
-        const reader=new FileReader();reader.onload=()=>{if(id===voiceId)vscode.postMessage({type:'dictation',id,data:String(reader.result).split(',')[1],format:mime.includes('webm')?'webm':mime.includes('ogg')?'ogg':'mp4'});};reader.onerror=()=>{cancelVoice();voiceMessage('Could not read recording.');};reader.readAsDataURL(blob);
+        try {
+          const wav=await labRecordingWav(blob);
+          if(id!==voiceId)return;
+          if(wav.size>LAB_VOICE_BYTES)throw Error('Recording exceeds the upload limit.');
+          const reader=new FileReader();
+          reader.onload=()=>{if(id===voiceId)vscode.postMessage({type:'dictation',id,data:String(reader.result).split(',')[1],format:'wav'});};
+          reader.onerror=()=>{if(id===voiceId){cancelVoice();voiceMessage('Could not read recording.');}};
+          reader.readAsDataURL(wav);
+        } catch(error) {if(id===voiceId){cancelVoice();voiceMessage(error.message||'Could not prepare audio.');}}
+
       };
-      recorder.start(1000);mic.disabled=false;mic.style.color='var(--vscode-errorForeground)';mic.setAttribute('aria-label','Stop dictation');voiceMessage('Recording · click microphone to transcribe · 5 minutes maximum');voiceTimer=setTimeout(()=>{if(recorder?.state==='recording')recorder.stop();releaseVoice();},300000);
+      recorder.start(1000);mic.disabled=false;mic.style.color='var(--vscode-errorForeground)';mic.setAttribute('aria-label','Stop dictation');voiceMessage('Recording · click microphone to transcribe · '+Math.round(LAB_VOICE_SECONDS/60)+' minutes maximum');voiceTimer=setTimeout(()=>{if(recorder?.state==='recording')recorder.stop();releaseVoice();},LAB_VOICE_SECONDS*1000);
     }catch(error){cancelVoice();voiceMessage(error.name==='NotAllowedError'?'Microphone permission denied. Allow microphone access for this workspace in your browser.':error.message||'Microphone unavailable.');}
   };
   window.addEventListener('message',event=>{

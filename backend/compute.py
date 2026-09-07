@@ -5,13 +5,14 @@ from kubernetes import client, config, watch
 from .scaling import WarmPolicy
 from .config import KUBECONFIG, NAMESPACE
 from .files import inputs
+from .limits import value,sandbox_environment
 from . import checkpoints
 
 def pod_manifest(name):
     return {'apiVersion':'v1','kind':'Pod','metadata':{'name':name,'namespace':NAMESPACE,'labels':{'lab/managed':'true','lab/mode':'quick','lab/state':'warm'}},'spec':{
       'restartPolicy':'Never','automountServiceAccountToken':False,'serviceAccountName':'unprivileged','activeDeadlineSeconds':1800,'terminationGracePeriodSeconds':0,
       'securityContext':{'runAsNonRoot':True,'runAsUser':1000,'runAsGroup':1000,'fsGroup':1000,'seccompProfile':{'type':'RuntimeDefault'}},
-      'containers':[{'name':'sandbox','image':'sandbox-lab/quick:local','imagePullPolicy':'Never','command':['sleep','infinity'],
+      'containers':[{'name':'sandbox','image':'sandbox-lab/quick:local','imagePullPolicy':'Never','command':['sleep','infinity'],'env':[{'name':k,'value':v} for k,v in sandbox_environment().items()],
         'securityContext':{'allowPrivilegeEscalation':False,'readOnlyRootFilesystem':True,'capabilities':{'drop':['ALL']}},
         'resources':{'requests':{'cpu':'100m','memory':'128Mi'},'limits':{'cpu':'1','memory':'768Mi','ephemeral-storage':'256Mi'}},
         'volumeMounts':[{'name':'work','mountPath':'/workspace'},{'name':'tmp','mountPath':'/tmp'},{'name':'home','mountPath':'/home/sandbox'}]}],
@@ -34,6 +35,10 @@ class Compute:
         def invoke():
             api=self.api()
             try: return getattr(api,method)(*args,**kw,_request_timeout=10)
+            except client.exceptions.ApiException as exc:
+                if exc.status==401:raise RuntimeError('The quick Python service could not authenticate to Kubernetes. Credential renewal may be reconnecting; retry shortly or restart the local launcher.') from None
+                if exc.status==403:raise RuntimeError('Kubernetes denied this quick Python operation. The operator needs to check the broker permissions.') from None
+                raise
             finally: api.api_client.close()
         return await asyncio.to_thread(invoke)
     async def snapshot(self):
@@ -143,7 +148,9 @@ class Compute:
         finally: self.acquiring-=1;self.refill.set()
     def status(self):
         return {'queued':self.queued,'executing':self.executing,'ready':sum(p.metadata.labels.get('lab/state')=='warm' and self.is_ready(p) and not p.metadata.deletion_timestamp for p in self.cache.values()),'target_reserve':self.policy.reserve(self.executing+self.queued+self.acquiring),'max_concurrency':self.max_concurrency,'max_pods':self.max_pods,'idle_seconds':self.policy.idle_seconds,'warm_hits':self.warm_hits,'cold_misses':self.cold_misses,'refill_seconds':round(self.policy.refill_seconds,3)}
-    async def execute(self, name, command, data=None, timeout=45, max_bytes=46_000_000):
+    async def execute(self, name, command, data=None, timeout=None, max_bytes=None):
+        timeout=timeout or value('QUICK_RUN_SECONDS')+15
+        max_bytes=max_bytes or value('ARTIFACT_MAX_TOTAL_BYTES')*4+1000000
         argv=['kubectl','--kubeconfig',KUBECONFIG,'-n',NAMESPACE,'exec','-i',name,'--',*command]
         p=await asyncio.create_subprocess_exec(*argv,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
         async def bounded(stream):

@@ -6,7 +6,9 @@ ROOT=Path(__file__).resolve().parents[1]
 os.chdir(ROOT)
 LOCAL=ROOT/'.local'; LOCAL.mkdir(exist_ok=True)
 PYTHON=str(ROOT/'.venv/bin/python')
-commands={'coder-connections':[PYTHON,'scripts/forward_coder.py'],'backend':[PYTHON,'-m','uvicorn','backend.main:app','--host','127.0.0.1','--port','8787','--no-access-log'],'frontend':['npm','run','dev','--','--host','127.0.0.1','--port','3000']}
+# Renew before serving requests; the watcher keeps long-running local sessions valid.
+subprocess.run([PYTHON,'scripts/broker_credentials.py'],check=True)
+commands={'broker-credentials':[PYTHON,'scripts/broker_credentials.py','--watch'],'coder-connections':[PYTHON,'scripts/forward_coder.py'],'backend':[PYTHON,'-m','uvicorn','backend.main:app','--host','127.0.0.1','--port','8787','--no-access-log'],'frontend':['npm','run','dev','--','--host','127.0.0.1','--port','3000']}
 children={}; logs={}; stop=False
 
 def end(*_):

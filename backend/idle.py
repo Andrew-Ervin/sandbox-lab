@@ -13,7 +13,7 @@ class IdleWorkspaces:
         self.project_idle=float(os.getenv('PROJECT_IDLE_SECONDS','300'))
         self.developer_idle=float(os.getenv('DEVELOPER_IDLE_SECONDS','600'))
     def protected(self,wid):
-        return (hasattr(self.coder,'reserve') and self.coder.reserve.protected(wid)) or wid in self.previews.active_workspaces() or wid in self.coder.active or wid in getattr(self.coder,'provisioning',set())
+        return (hasattr(self.coder,'reserve') and self.coder.reserve.protected(wid)) or wid in self.previews.active_workspaces() or wid in self.coder.active or wid in getattr(self.coder,'native_active',set()) or wid in getattr(self.coder,'provisioning',set())
     async def reap(self):
         for adapter,seconds in [(self.coder,self.project_idle),(self.developer,self.developer_idle)]:
             result=await adapter.api('GET','/api/v2/workspaces',params={'q':'owner:me'})

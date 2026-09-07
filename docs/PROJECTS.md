@@ -4,15 +4,19 @@ A project groups conversations and one shared headless coding environment. Ordin
 
 A project can also link to one developer workstation. **Open in VS Code** creates or resumes that link. Existing developer workstations have project links, and new workstations receive a project automatically. This never assigns the developer workspace ID as the chat execution target.
 
-The environments have separate Coder control planes, namespaces, home volumes, credentials, packages and processes. **Open in VS Code**, in a project chat or project page, creates/resumes the developer workstation, copies eligible source from its existing headless home, and opens that copied folder. No separate outbound copy button is needed. Projects without headless compute open the developer home without allocating a chat sandbox.
+The environments have separate Coder control planes, namespaces, home volumes, credentials, packages and processes. **Open in VS Code** creates/resumes the developer workstation, synchronizes eligible project source, and opens its working folder. **New chat in project** automatically brings developer source into the separate headless home before the chat starts. Neither flow requires a copy/review step. An empty developer-only project does not allocate headless compute until it has source to continue or the assistant delegates a coding task.
 
-Copies are keyed by the source manifest. Reopening unchanged chat source reuses its existing developer copy without overwriting edits. Changed chat source creates a new import folder. This is a point-in-time handoff, not continuous mirroring. Active project coding must finish before a copy. Packages must be restored from manifests/lockfiles inside the developer environment. Its App preview uses the copied folder’s launch recipe; only one app server on port 3000 is supported per workstation. Recipes should use relative paths so they remain portable between homes.
+## Ongoing source sync
 
-## Returning developer changes
+While both linked environments are running, the trusted local broker compares source manifests every **15 seconds** (`PROJECT_SYNC_SECONDS`). It also checks on handoff and after a chat turn. Sleeping environments stay asleep during background checks; opening either side catches up its files. Sync does not count as user activity or defeat idle shutdown. Active chat coding holds the project lock, so background copying waits for that run to finish.
 
-**Copy to chat** reads the developer folder opened by the handoff. Both environments must already exist. A review wakes sleeping environments and lists eligible source files, sizes, and whether they are new, matching or different from the destination's live files. Approval copies exactly the reviewed bytes into a new `.lab/imports/transfer_<id>` directory. It never overwrites live source. Ask your coding agent to inspect and deliberately merge the import, or merge it yourself. Packages must be restored from manifests/lockfiles inside the destination.
+A last-common hash per file identifies which side changed. One-sided edits, new files and tracked deletions propagate automatically. If both sides changed a file, both versions remain and the project displays **Keep chat** / **Keep VS Code** choices. Destination hashes are checked again before atomic file replacement. The baseline and status survive backend restarts. Failed or oversized reads are not treated as deletions.
 
-Limits: 2,000 files, 8 MB per file, 32 MB total, 10,000 scanned directory entries. Hidden credential paths, dependency trees, build output, symlinks and previous imports are excluded. Reviews expire after five minutes; the local broker holds at most two pending/preparing reviews. Each destination retains at most three import folders; another copy is refused until the user moves/removes an older one. There is no automatic deletion of previous source snapshots. Filename exclusions are not content inspection or full DLP.
+Fresh projects synchronize their project roots. Older snapshot-based projects continue in their previously selected import folders. Ongoing sync updates those same folders; it does not accumulate a snapshot on every pass. Unselected legacy import folders are excluded and retained until explicitly removed.
+
+Limits: 2,000 files, 8 MB per file, 32 MB total, 10,000 scanned entries, two transfer operations. Dependency trees, hidden credential paths, build output, symlinks and recursive imports are excluded. Filename exclusions are not content inspection or full DLP. Credentials, installed packages, processes and unsaved editor buffers are not synchronized. Restore dependencies from manifests/lockfiles in each environment using its package gateway. Its app preview uses that environment's source/launch recipe; one app server on port 3000 is supported per workstation.
+
+This is eventual file synchronization, not a transactional project filesystem or a collaborative editor. Avoid editing the same files concurrently; saved multi-file changes can be observed partway through. A running dev server may need a rebuild/restart after source changes. For production, use Git revisions, distributed leases and a durable sync queue with audited conflict handling; see `AZURE-IMPLEMENTATION.md`.
 
 Mock sync to OneDrive saves a separate bounded local mirror under ignored local state. No Microsoft service is contacted. Azure Blob, OneLake and OneDrive integrations remain proposals.
 
@@ -38,3 +42,12 @@ Saved chat presentation can be rebuilt without model calls:
 ```
 
 This updates supported saved widgets, keeping original messages, item IDs/timestamps and artifact files. It does not regenerate an assistant's old prose. A private experiment can register its own presentation migration; clean installations need no experiment files. Reload an open conversation after applying changes.
+
+
+Main chat can search through OpenRouter’s Exa server tool when the administrator enables it. Provider source annotations become native ChatKit citations, including the Sources panel, and persist with the saved answer. Title generation does not search.
+
+Internal app and artifact links open the authenticated side preview through native ChatKit deeplinks. Open app in the project chat header stays available while a later coding run edits the same project; the older saved card remains in history.
+
+### App dependencies after source sync
+
+Node app previews started with an npm launch recipe restore dependencies automatically: `npm ci` when a package lock exists, otherwise `npm install` to create one. The restore goes through the existing package gateway and release-age policy. A manifest/lockfile digest avoids repeating it when unchanged; missing `node_modules` always restores. The marker and packages stay in that workspace's home. Failed installs expose an app-start error rather than silently bypassing package policy. Other languages should use a self-restoring launch command (`uv run`, `go run`, `cargo run`, `dotnet run`) or an explicit project startup script; the preview service does not copy their installed environments.

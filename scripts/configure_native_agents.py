@@ -4,6 +4,7 @@ from pathlib import Path
 import httpx
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 from backend.config import STATE,API_KEY,MODEL,REASONING
+from sandbox.model_policy import provider_policy
 
 def main():
     if not API_KEY:raise RuntimeError('OPENROUTER_API_KEY is required')
@@ -25,7 +26,7 @@ def main():
     else:
         provider=request('POST','/api/v2/ai/providers',json={'type':'openrouter','name':'lab-openrouter','display_name':'OpenRouter','enabled':True,'base_url':'https://openrouter.ai/api/v1','api_keys':[API_KEY]})
     model=next((m for m in models if m['model']==MODEL),None)
-    body={'ai_provider_id':provider['id'],'model':MODEL,'display_name':MODEL+' · '+REASONING,'enabled':True,'is_default':True,'context_limit':1050000,'model_config':{'max_output_tokens':16000,'reasoning_effort':{'default':REASONING,'max':REASONING},'provider_options':{'openrouter':{'extra_body':{'provider':{'zdr':True,'data_collection':'deny'}}}}}}
+    body={'ai_provider_id':provider['id'],'model':MODEL,'display_name':MODEL+' · '+REASONING,'enabled':True,'is_default':True,'context_limit':1050000,'model_config':{'max_output_tokens':16000,'reasoning_effort':{'default':REASONING,'max':REASONING},'provider_options':{'openrouter':{'extra_body':{'provider':provider_policy()}}}}}
     model=request('PATCH',prefix+'/model-configs/'+model['id'],json=body) if model else request('POST',prefix+'/model-configs',json=body)
     path=STATE/'native-coder.json';path.write_text(json.dumps({'api_prefix':prefix,'model_config_id':model['id'],'model':MODEL,'reasoning':REASONING}));path.chmod(0o600)
     print('Native Coder configured:',MODEL,REASONING,'; provider key stored only in Coder control plane.')

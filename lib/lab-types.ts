@@ -61,6 +61,12 @@ export type Project = {
   developer_status?: string | null;
   workspace_sync?: {
     direction: 'to_chat' | 'to_developer';
+    state?: 'synced' | 'conflict' | 'retrying';
+    conflicts?: string[];
+    conflict_count?: number;
+    error?: string;
+    chat_source_path?: string;
+    developer_source_path?: string;
     at: number;
     path: string;
     file_count: number;

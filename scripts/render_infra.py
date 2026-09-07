@@ -4,6 +4,8 @@ import yaml,os
 from dotenv import load_dotenv
 ROOT=Path(__file__).resolve().parents[1]
 load_dotenv(ROOT/'.env')
+load_dotenv(ROOT/'config/limits.env')
+load_dotenv(ROOT/'config/models.env')
 native_agents=os.getenv('PROJECT_ENGINE','ori-pi')=='coder-native'
 docs=[]
 def add(kind,name,ns=None,**extra):
@@ -20,7 +22,7 @@ for ns,quota in [('lab-sandboxes',{'pods':'10','requests.cpu':'4','limits.cpu':'
     if ns=='lab-agents':
         quota.update({'pods':os.getenv('PROJECT_MAX_RUNNING','4'),'requests.storage':os.getenv('AI_STORAGE_QUOTA','100Gi'),'persistentvolumeclaims':os.getenv('AI_MAX_RETAINED_WORKSPACES','50')})
     if ns=='lab-dev':
-        quota.update({'requests.storage':os.getenv('DEVELOPER_STORAGE_QUOTA','40Gi'),'persistentvolumeclaims':os.getenv('DEVELOPER_MAX_RETAINED_WORKSPACES','20')})
+        quota.update({'pods':os.getenv('DEVELOPER_MAX_RUNNING','3'),'requests.storage':os.getenv('DEVELOPER_STORAGE_QUOTA','40Gi'),'persistentvolumeclaims':os.getenv('DEVELOPER_MAX_RETAINED_WORKSPACES','20')})
     add('ResourceQuota','capacity',ns,spec={'hard':quota})
     add('ServiceAccount','unprivileged',ns,automountServiceAccountToken=False)
     add('NetworkPolicy','default-deny',ns,spec={'podSelector':{},'policyTypes':['Ingress','Egress']})
@@ -53,8 +55,8 @@ def deploy(name,ns,image,port=None,**container_extra):
     if port: container['ports']=[{'containerPort':port}]; add('Service',name,ns,spec={'selector':{'app':name},'ports':[{'port':port,'targetPort':port}]})
     add('Deployment',name,ns,spec={'replicas':1,'selector':{'matchLabels':{'app':name}},'template':{'metadata':{'labels':{'app':name}},'spec':spec}})
     return spec,container
-add('ConfigMap','gateway-code','lab-control',data={'gateway.py':(ROOT/'sandbox/gateway.py').read_text()})
-s,c=deploy('model-gateway','lab-control','sandbox-lab/gateway:local',8080,command=['uvicorn','gateway:app','--app-dir','/app','--host','0.0.0.0','--port','8080','--no-access-log'],envFrom=[{'secretRef':{'name':'model-credentials'}}],volumeMounts=[{'name':'code','mountPath':'/app','readOnly':True}])
+add('ConfigMap','gateway-code','lab-control',data={name:(ROOT/'sandbox'/name).read_text() for name in ('gateway.py','model_policy.py')})
+s,c=deploy('model-gateway','lab-control','sandbox-lab/gateway:local',8080,command=['uvicorn','gateway:app','--app-dir','/app','--host','0.0.0.0','--port','8080','--no-access-log'],env=[{'name':k,'value':os.environ[k]} for k in ('WEB_SEARCH_MAX_RESULTS','WEB_SEARCH_MAX_TOTAL_RESULTS','WEB_SEARCH_MAX_USES','DICTATION_MAX_BYTES','MODEL_MAX_BODY_BYTES','OPENROUTER_REQUIRE_ZDR','OPENROUTER_DATA_COLLECTION','OPENROUTER_PROVIDER_ORDER','OPENROUTER_PROVIDER_IGNORE')],envFrom=[{'secretRef':{'name':'model-credentials'}}],volumeMounts=[{'name':'code','mountPath':'/app','readOnly':True}])
 s['volumes']=[{'name':'code','configMap':{'name':'gateway-code'}}]
 # Keep model gateway replacement predictable locally; no request ledger is used.
 next(d for d in docs if d['kind']=='Deployment' and d['metadata']['name']=='model-gateway')['spec']['strategy']={'type':'Recreate'}

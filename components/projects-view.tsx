@@ -146,7 +146,7 @@ export function ProjectsView({
     }
   }
   async function newChat(pid = selected) {
-    if (!pid) return;
+    if (!pid || creating) return;
     setCreating(true);
     try {
       const result = await request<{ id: string }>(
@@ -391,7 +391,8 @@ export function ProjectsView({
               )}
               <div className="project-toolbar">
                 <Button onClick={() => void newChat()} disabled={creating}>
-                  <Plus size={16} /> New chat in project
+                  <Plus size={16} />{' '}
+                  {creating ? 'Preparing chat & files…' : 'New chat in project'}
                 </Button>
                 <Button
                   variant="secondary"

@@ -9,17 +9,17 @@ import {
   type CSSProperties,
 } from 'react';
 import { ChatKit, useChatKit } from '@openai/chatkit-react';
+import { CodingSessionStrip } from '@/components/coding-session-strip';
+import { ChatTransport } from '@/lib/chat-transport';
 import {
   Box,
   Monitor,
   X,
   Plus,
   ShieldCheck,
-  Terminal,
   AppWindow,
   FolderOpen,
   LoaderCircle,
-  Square,
   PanelRightOpen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -187,6 +187,9 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
   const { openPreview: showPreviewPane } = panes;
   const [chatReady, setChatReady] = useState(false);
   const [threadLoading, setThreadLoading] = useState(false);
+  const transport = useRef(new ChatTransport());
+  const loadedThread = useRef<string | null>(null);
+  const lastJobSync = useRef('');
   const csrf = useRef(boot.csrf);
   const renewing = useRef<Promise<void> | null>(null);
   const sessionFetch = useCallback(
@@ -197,7 +200,15 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
         return fetch(input, { ...init, headers });
       };
       let response = await send();
-      if (response.status === 401) {
+      const rejection =
+        response.status === 403
+          ? ((await response
+              .clone()
+              .json()
+              .catch(() => null)) as { detail?: string } | null)
+          : null;
+      const staleCsrf = rejection?.detail === 'Invalid CSRF token';
+      if (response.status === 401 || staleCsrf) {
         renewing.current ??= fetch('/api/bootstrap', { method: 'POST' })
           .then(async (r) => {
             if (!r.ok) throw Error('Could not reconnect to the lab.');
@@ -531,7 +542,10 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
         const headers = new Headers(init?.headers);
         headers.set('X-Lab-CSRF', boot.csrf);
         headers.set('X-Lab-Mode', 'auto');
-        return sessionFetch(input, { ...init, headers });
+        return transport.current.send(sessionFetch, input, {
+          ...init,
+          headers,
+        });
       },
     },
     widgets: {
@@ -568,7 +582,9 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
               body: JSON.stringify(action.payload),
             });
             if (!r.ok) {
-              setError('This request is expired, already handled, or unavailable. No new approval was recorded.');
+              setError(
+                'This request is expired, already handled, or unavailable. No new approval was recorded.',
+              );
             } else {
               setError('');
               void refresh();
@@ -577,7 +593,9 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
             // Starting a second fetch while it streams can race that update.
             if (!streaming.current) await chat.fetchUpdates();
           } catch {
-            setError('The approval service could not be reached. Your decision was not confirmed; check the card before retrying.');
+            setError(
+              'The approval service could not be reached. Your decision was not confirmed; check the card before retrying.',
+            );
           }
           return;
         }
@@ -640,9 +658,33 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
     disclaimer: {
       text: 'Local security lab · Check generated code and results.',
     },
+    onDeeplink: ({ name }) => {
+      const match = /^app-(run_[a-f0-9]{32})$/.exec(name);
+      if (match)
+        void openPreview('App preview', `/api/app-preview/${match[1]}`);
+      const file = /^file-(run_[a-f0-9]{32})-([a-f0-9]{2,320})$/.exec(name);
+      if (file && file[2].length % 2 === 0) {
+        const filename = new TextDecoder().decode(
+          Uint8Array.from(file[2].match(/../g)!, (hex) => parseInt(hex, 16)),
+        );
+        if (
+          /^[A-Za-z0-9][A-Za-z0-9_. -]{0,159}$/.test(filename) &&
+          !filename.includes('..')
+        )
+          void openPreview(
+            filename,
+            `/api/artifact-view/${file[1]}/${encodeURIComponent(filename)}`,
+          );
+      }
+    },
     onReady: () => setChatReady(true),
-    onThreadLoadStart: () => setThreadLoading(true),
-    onThreadLoadEnd: () => setThreadLoading(false),
+    onThreadLoadStart: ({ threadId }) => {
+      if (threadId !== loadedThread.current) setThreadLoading(true);
+    },
+    onThreadLoadEnd: ({ threadId }) => {
+      loadedThread.current = threadId;
+      setThreadLoading(false);
+    },
     onThreadChange: ({ threadId }) => {
       setThread(threadId);
       void refresh();
@@ -662,7 +704,17 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
   });
   usePolling(
     async () => {
-      if (!streaming.current) await chat.fetchUpdates();
+      if (streaming.current || transport.current.pending.size) return;
+      const job = status?.jobs.find((j) => j.thread_id === thread);
+      if (!job) return;
+      const key = job.id + ':' + job.status;
+      if (
+        !['queued', 'running'].includes(job.status) &&
+        lastJobSync.current === key
+      )
+        return;
+      await chat.fetchUpdates();
+      lastJobSync.current = key;
     },
     4000,
     { enabled: Boolean(thread) && view === 'chat' },
@@ -671,6 +723,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
     filesRequest.current++;
     setFiles([]);
     setProjectId(null);
+    setThreadLoading(Boolean(id) && id !== loadedThread.current);
     streaming.current = false;
     setView('chat');
     setPreview(null);
@@ -701,8 +754,13 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
           other.preview_url && !other.gallery_hidden && other.pod === r.pod,
       ) === i,
   );
+  const currentApp = appRuns.find(
+    (r) =>
+      r.thread_id === thread ||
+      (currentProject?.workspace_id &&
+        r.workspace_id === currentProject.workspace_id),
+  );
   const currentRuns = status?.runs.filter((r) => r.thread_id === thread) || [];
-  const latest = currentRuns[0];
   useEffect(() => {
     const mc = (
       document as Document & {
@@ -746,7 +804,12 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
     } catch {}
     return () => life.abort();
   }, [api]);
+  const creatingProject = useRef(false);
+  const [preparingProjectChat, setPreparingProjectChat] = useState(false);
   const newProjectChat = async (id: string) => {
+    if (creatingProject.current) return;
+    creatingProject.current = true;
+    setPreparingProjectChat(true);
     try {
       const r = await sessionFetch(`/api/projects/${id}/threads`, {
         method: 'POST',
@@ -757,6 +820,9 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
       selectThread(data.id);
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      creatingProject.current = false;
+      setPreparingProjectChat(false);
     }
   };
   return (
@@ -791,7 +857,10 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
             <div className="brand">
               <Box size={24} />
               <span>Sandbox Lab</span>
-              <SidebarTrigger aria-label="Collapse sidebar" title="Collapse sidebar" />
+              <SidebarTrigger
+                aria-label="Collapse sidebar"
+                title="Collapse sidebar"
+              />
             </div>
             <Button
               variant="ghost"
@@ -910,22 +979,73 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
           />
         </Sidebar>
         <main className="lab-main">
+          {preparingProjectChat && (
+            <div className="workspace-source-notice" role="status">
+              Preparing chat and copying workspace files…
+            </div>
+          )}
           <header className="topbar">
             <div className="topbar-left">
-              <SidebarTrigger className={panes.historyOpen ? 'md:hidden' : ''} aria-label="Open sidebar" title="Open sidebar" />
+              <SidebarTrigger
+                className={panes.historyOpen ? 'md:hidden' : ''}
+                aria-label="Open sidebar"
+                title="Open sidebar"
+              />
               {view === 'chat' && currentProject && (
-                <Button variant="ghost" size="sm" className="project-header-link" title="Open project files" onClick={() => openProject(currentProject.id)}>
-                  <FolderOpen size={15} /><span>{currentProject.name}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="project-header-link"
+                  title="Open project files"
+                  onClick={() => openProject(currentProject.id)}
+                >
+                  <FolderOpen size={15} />
+                  <span>{currentProject.name}</span>
                 </Button>
               )}
             </div>
             <div className="topbar-actions">
-              {view === 'chat' && currentProject && !(panes.previewOpen && preview?.ide) && (
-                <OpenProjectWorkspaceButton project={currentProject} sessionFetch={sessionFetch} onRefresh={() => refresh(true)}
-                  onOpen={(ws) => openPreview(currentProject.name, `/api/developer/workspaces/${ws.id}/open`, ws, true)} />
-              )}
+              {view === 'chat' &&
+                currentApp &&
+                !(panes.previewOpen && !preview?.ide) && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      void openPreview(
+                        currentApp.title || 'App preview',
+                        currentApp.preview_url!,
+                      )
+                    }
+                  >
+                    Open app
+                  </Button>
+                )}
+              {view === 'chat' &&
+                currentProject &&
+                !(panes.previewOpen && preview?.ide) && (
+                  <OpenProjectWorkspaceButton
+                    project={currentProject}
+                    sessionFetch={sessionFetch}
+                    onRefresh={() => refresh(true)}
+                    onOpen={(ws) =>
+                      openPreview(
+                        currentProject.name,
+                        `/api/developer/workspaces/${ws.id}/open`,
+                        ws,
+                        true,
+                      )
+                    }
+                  />
+                )}
               {preview && !panes.previewOpen && (
-                <Button variant="ghost" size="icon-sm" onClick={reopenPreview} aria-label="Reopen preview" title={`Reopen ${preview.title}`}>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={reopenPreview}
+                  aria-label="Reopen preview"
+                  title={`Reopen ${preview.title}`}
+                >
                   <PanelRightOpen size={17} />
                 </Button>
               )}
@@ -1003,40 +1123,21 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                   }}
                 />
               </div>
-              {activeJob && (
-                <div className="run-strip">
-                  <button onClick={() => setInspect(true)}>
-                    {activeJob ? (
-                      <LoaderCircle size={16} className="spin" />
-                    ) : (
-                      <Terminal size={16} />
-                    )}
-                    <span>
-                      {activeJob?.progress ||
-                        `Last run: ${modes[latest.mode]} · ${latest.status}${latest.elapsed != null ? ` · ${latest.elapsed.toFixed(1)}s` : ''}`}
-                    </span>
-                  </button>
-                  {activeJob && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={async () => {
-                        await sessionFetch(`/api/threads/${thread}/stop`, {
-                          method: 'POST',
-                        });
-                        streaming.current = false;
-                        void refresh();
-                        void chat
-                          .fetchUpdates()
-                          .catch((e: Error) => setError(e.message));
-                      }}
-                    >
-                      <Square size={12} /> Stop run
-                    </Button>
-                  )}
-
-                </div>
-              )}
+              <CodingSessionStrip
+                thread={view === 'chat' ? thread : null}
+                sessionFetch={sessionFetch}
+                progress={activeJob?.progress}
+                onInspect={() => setInspect(true)}
+                onError={setError}
+                onStopChat={async () => {
+                  await sessionFetch(`/api/threads/${thread}/stop`, {
+                    method: 'POST',
+                  });
+                  streaming.current = false;
+                  void refresh();
+                  await chat.fetchUpdates();
+                }}
+              />
             </div>
             {view === 'apps' && (
               <Suspense fallback={<PanelLoading />}>

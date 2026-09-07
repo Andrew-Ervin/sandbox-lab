@@ -14,11 +14,12 @@ class AppLifecycle:
         env=dict(os.environ,CODER_URL=url,CODER_SESSION_TOKEN=token,CODER_CONFIG_DIR=str(STATE/'coder-service-cli'),CODER_USE_KEYRING='false')
         developer_source_url('',source_path)
         script=(ROOT/'sandbox/app_runtime.py').read_text()
-        command='python -I -c '+shlex.quote(script)
+        from .limits import value
+        command='python -I -c '+shlex.quote('import os; os.environ["APP_PACKAGE_RESTORE_SECONDS"]='+repr(str(value('APP_PACKAGE_RESTORE_SECONDS')))+'\n'+script)
         if source_path:command+=' '+shlex.quote(source_path)
         process=await asyncio.create_subprocess_exec(str(ROOT/'.local/bin/coder'),'ssh','--disable-autostart',workspace['name'],'--',command,env=env,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
         try:
-            out,_=await asyncio.wait_for(process.communicate(),140)
+            out,_=await asyncio.wait_for(process.communicate(),value('APP_PACKAGE_RESTORE_SECONDS')+140)
             if process.returncode:
                 import json
                 try:error=json.loads(out).get('error')
@@ -28,12 +29,22 @@ class AppLifecycle:
             if process.returncode is None:process.kill();await process.wait()
     async def ai(self,run,store,owner,coder,previews):
         async with self.locks.setdefault(run['workspace_id'],asyncio.Lock()):
+            stopping=getattr(getattr(coder,'sessions',None),'stopping',set())
+            # Opening immediately after Stop coding queues the wake until the
+            # previous compute has actually stopped, without another chat turn.
+            for _ in range(60):
+                if run['workspace_id'] not in stopping:break
+                await asyncio.sleep(1)
+            else:raise ValueError('Workspace shutdown is taking longer than expected. Retry the preview shortly.')
             thread=await store.load_thread(run['thread_id'],{'owner':owner})
             if thread.metadata.get('coder_workspace_id')!=run['workspace_id']:raise ValueError('App workspace ownership mismatch')
             ws=await coder.workspace(thread,store,{'owner':owner})
             coder.provisioning.add(ws['id']);coder.touched[ws['id']]=time.time()
             try:
-                await self.launch(ws,coder.settings()['token'],CODER_URL)
+                project=store.project_for_thread(thread.id,owner)
+                sync=(project or {}).get('workspace_sync') or {}
+                source_path=sync.get('chat_source_path',sync.get('path') if sync.get('direction')=='to_chat' else None)
+                await self.launch(ws,coder.settings()['token'],CODER_URL,source_path)
                 return await previews.app(ws,coder.settings())
             finally:coder.provisioning.discard(ws['id']);coder.touched[ws['id']]=time.time()
     async def human(self,workspace_id,developer,previews,ide=False,source_path=None):

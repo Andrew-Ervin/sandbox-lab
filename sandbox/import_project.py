@@ -12,14 +12,14 @@ def publish(request,root_path=ROOT):
     key=request['id']
     if not re.fullmatch(r'transfer_[a-f0-9]{32}',key):raise ValueError('Invalid transfer')
     entries=request['files']
-    if not isinstance(entries,list) or len(entries)>2000:raise ValueError('Too many files')
+    if not isinstance(entries,list) or len(entries)>int(os.getenv('SYNC_MAX_FILES','2000')):raise ValueError('Too many files')
     files=[];seen=set();total=0
     for entry in entries:
         path=entry['path'];parts=path.split('/')
         if len(path)>1024 or len(parts)>16 or any(not n or n in ('.','..') or '\\' in n or '\x00' in n or (n.startswith('.') and n!='.lab') or n in ('node_modules','venv','target','__pycache__') or n.lower().endswith(('.pem','.key','.p12','.pfx')) for n in parts):raise ValueError('Excluded path')
         if path in seen or path.startswith('.lab/imports/'):raise ValueError('Duplicate or recursive import')
         raw=base64.b64decode(entry['data'],validate=True);total+=len(raw)
-        if len(raw)>8_000_000 or total>32_000_000:raise ValueError('Import exceeds size limit')
+        if len(raw)>int(os.getenv('SYNC_MAX_FILE_BYTES','8000000')) or total>int(os.getenv('SYNC_MAX_TOTAL_BYTES','32000000')):raise ValueError('Import exceeds size limit')
         if hashlib.sha256(raw).hexdigest()!=entry['sha256']:raise ValueError('Import checksum mismatch')
         seen.add(path);files.append((parts,raw))
     root=os.open('/',os.O_RDONLY|os.O_DIRECTORY);inbox=None;stage=None
@@ -41,7 +41,7 @@ def publish(request,root_path=ROOT):
             for n,entry in enumerate(scan):
                 if n>=100:raise ValueError('Import inbox needs cleanup')
                 if re.fullmatch(r'transfer_[a-f0-9]{32}',entry.name):count+=1
-        if count>=3:raise ValueError('Move or remove an earlier import first; three snapshots are retained at most')
+        if count>=int(os.getenv('SYNC_MAX_IMPORTS','3')):raise ValueError('Move or remove an earlier import first; three snapshots are retained at most')
         try:os.stat(key,dir_fd=inbox,follow_symlinks=False)
         except FileNotFoundError:pass
         else:raise ValueError('Transfer already exists')

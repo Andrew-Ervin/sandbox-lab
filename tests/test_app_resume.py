@@ -8,7 +8,8 @@ from backend.apps import AppLifecycle
 async def test_click_resume_owns_workspace_and_serializes_launches(monkeypatch):
     runtime=AppLifecycle();inside=0;peak=0
     class Store:
-        async def load_thread(self,thread,context):return SimpleNamespace(metadata={'coder_workspace_id':'owned'})
+        async def load_thread(self,thread,context):return SimpleNamespace(id=thread,metadata={'coder_workspace_id':'owned'})
+        def project_for_thread(self,*args):return None
     class Coder:
         provisioning=set();touched={}
         async def workspace(self,*args):return {'id':'owned','name':'ai-demo'}

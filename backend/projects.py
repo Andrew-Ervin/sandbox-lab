@@ -1,4 +1,5 @@
 """Human project browser and local-only OneDrive mock. No model or cloud sync calls."""
+from .limits import value,script_with_limits
 import asyncio,base64,json,os,re,shlex,shutil,tempfile,time,uuid
 from datetime import datetime,timezone
 from pathlib import Path,PurePosixPath
@@ -21,7 +22,7 @@ def write_mock_sync(project_id,payload,root=None):
     root=root or STATE/'mock-onedrive'/'Projects'
     root.mkdir(parents=True,exist_ok=True,mode=0o700)
     files=payload.get('files')
-    if not isinstance(files,list) or len(files)>2000:raise ValueError('Invalid export')
+    if not isinstance(files,list) or len(files)>value('SYNC_MAX_FILES'):raise ValueError('Invalid export')
     base=root/project_id;base.mkdir(exist_ok=True,mode=0o700)
     stage=Path(tempfile.mkdtemp(prefix='.sync-',dir=base));previous=base/'previous';latest=base/'files'
     size=0;manifest=[];seen=set()
@@ -31,7 +32,7 @@ def write_mock_sync(project_id,payload,root=None):
             if str(path) in seen:raise ValueError('Duplicate export path')
             seen.add(str(path));raw=base64.b64decode(entry['data'],validate=True)
             size+=len(raw)
-            if len(raw)>8_000_000 or size>32_000_000:raise ValueError('Export exceeds sync limits')
+            if len(raw)>value('SYNC_MAX_FILE_BYTES') or size>value('SYNC_MAX_TOTAL_BYTES'):raise ValueError('Export exceeds sync limits')
             dest=stage/path;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(raw);dest.chmod(0o600)
             manifest.append({'path':str(path),'bytes':len(raw)})
         result={'mock':True,'synced_at':time.time(),'file_count':len(files),'bytes':size,'excluded':payload.get('excluded',0),'destination':'OneDrive (mock)/Projects/'+project_id,'files':manifest}
@@ -71,14 +72,14 @@ class ProjectFiles:
         result=await self.invoke(workspace,(ROOT/'sandbox/project_files.py').read_text(),{'action':action,'path':path},developer)
         if action=='list':
             entries=result.get('entries',[])
-            if len(entries)>2000:raise ValueError('Too many entries')
+            if len(entries)>value('SYNC_MAX_FILES'):raise ValueError('Too many entries')
             for entry in entries:safe_path(entry['path'])
         return result
 
     async def invoke(self,workspace,script,payload,developer=None):
         token=developer.token if developer else self.coder.settings()['token']
         env=dict(os.environ,CODER_URL='http://127.0.0.1:7080' if developer else CODER_URL,CODER_SESSION_TOKEN=token,CODER_CONFIG_DIR=str(STATE/('coder-dev-transfer-cli' if developer else 'coder-service-cli')),CODER_USE_KEYRING='false')
-        proc=await asyncio.create_subprocess_exec(str(ROOT/'.local/bin/coder'),'ssh','--disable-autostart',workspace['name'],'--','python -I -c '+shlex.quote(script),env=env,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
+        proc=await asyncio.create_subprocess_exec(str(ROOT/'.local/bin/coder'),'ssh','--disable-autostart',workspace['name'],'--','python -I -c '+shlex.quote(script_with_limits(script)),env=env,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
         async def bounded(stream,maximum):
             data=bytearray()
             while part:=await stream.read(65536):
@@ -87,7 +88,7 @@ class ProjectFiles:
             return data
         try:
             proc.stdin.write(json.dumps(payload).encode());await proc.stdin.drain();proc.stdin.close()
-            out,_=await asyncio.wait_for(asyncio.gather(bounded(proc.stdout,48_000_000),bounded(proc.stderr,32000)),60)
+            out,_=await asyncio.wait_for(asyncio.gather(bounded(proc.stdout,value('SYNC_MAX_TOTAL_BYTES')*2+value('SYNC_MAX_FILES')*2048),bounded(proc.stderr,32000)),60)
             await proc.wait();result=json.loads(out)
             if proc.returncode or result.get('error'):raise ValueError('Project path unavailable or export exceeds limits. Dependencies, credential files and symlinks are excluded.')
             return result
@@ -119,13 +120,6 @@ def install_projects(app,store,coder,live_containers):
             p['status']='delete failed' if p['deletion'] and p['deletion']['status']=='failed' else 'deleting' if p['deleting'] else 'unknown' if 'lab-agents' in live['unavailable_namespaces'] else pod['state'] if pod else 'stopped' if p['workspace_id'] else 'not started'
             p['developer_status']='unknown' if 'lab-dev' in live['unavailable_namespaces'] else dev_pods[p['developer_workspace_id']]['state'] if p['developer_workspace_id'] in dev_pods else 'stopped' if p['developer_workspace_id'] else None
         return projects
-
-    @app.post('/api/projects/{pid}/threads')
-    async def new_thread(pid:str,request:Request):
-        owned(pid,request)
-        thread=ThreadMetadata(id=store.generate_thread_id({}),title='New conversation',created_at=datetime.now(timezone.utc))
-        await store.save_thread(thread,{'owner':request.state.owner});store.attach_project(thread,request.state.owner,pid)
-        return {'id':thread.id,'project_id':pid}
 
     @app.post('/api/projects/{pid}/open')
     async def open_project(pid:str,request:Request):
@@ -160,6 +154,6 @@ def install_projects(app,store,coder,live_containers):
                 result=await asyncio.to_thread(write_mock_sync,pid,payload)
                 store.save_project_sync(pid,request.state.owner,result)
                 return result
-            except (ValueError,RuntimeError,asyncio.TimeoutError):raise HTTPException(400,'Mock sync could not complete. Previous copy retained. Limit: 2,000 files, 8 MB per file, 32 MB total.')
+            except (ValueError,RuntimeError,asyncio.TimeoutError):raise HTTPException(400,'Mock sync could not complete. Previous copy retained. Check the configured source-transfer limits in config/limits.env.')
 
     return deletions

@@ -3,6 +3,7 @@ import asyncio,json,time,os,shlex
 from .config import ROOT
 from .previews import previews
 from .files import inputs
+from .limits import value,script_with_limits
 from .activity import Activity
 from .reserve import ProjectReserve
 import httpx
@@ -18,13 +19,25 @@ class CoderAgents:
         self.login_lock=asyncio.Lock(); self.provision_lock=asyncio.Lock(); self.slots=asyncio.Semaphore(max(1,int(os.getenv("PROJECT_CONCURRENCY","2")))); self.active=set(); self.touched=Activity('ai')
         self.max_running=max(1,int(os.getenv('PROJECT_MAX_RUNNING','4')))
         self.provisioning=set();self.reserve=ProjectReserve(self);self.project_locks={}
+    @property
+    def native_active(self):
+        return self.sessions.active_workspaces if hasattr(self,'sessions') else set()
     def settings(self):
         path=STATE/'coder-integration.json'
         if not path.exists(): raise RuntimeError('Coder Agents setup has not completed')
         return json.loads(path.read_text())
     async def api(self,method,path,**kw):
+        # GETs are safe to reconnect. Mutation responses can be ambiguous;
+        # never blindly resubmit a coding prompt, build, or tool invocation.
+        for attempt in range(value('CODER_READ_ATTEMPTS') if method=='GET' else 1):
+            try:return await self._api_once(method,path,**kw)
+            except (httpx.TransportError,CoderAPIError) as error:
+                retry=isinstance(error,httpx.TransportError) or error.status_code in (429,502,503,504)
+                if method!='GET' or not retry or attempt+1>=value('CODER_READ_ATTEMPTS'):raise
+                await asyncio.sleep(min(4,2**attempt))
+    async def _api_once(self,method,path,**kw):
         settings=self.settings()
-        async with httpx.AsyncClient(base_url=CODER_URL,headers={'Coder-Session-Token':settings['token']},timeout=30,trust_env=False) as c:
+        async with httpx.AsyncClient(base_url=CODER_URL,headers={'Coder-Session-Token':settings['token']},timeout=kw.pop('_timeout',30),trust_env=False) as c:
             r=await c.request(method,path,**kw)
             if r.status_code==401:
                 async with self.login_lock:
@@ -35,7 +48,7 @@ class CoderAgents:
                         if login.status_code!=200: raise RuntimeError('Coder service login failed; rerun scripts/configure_agents.py')
                         current['token']=login.json()['session_token']
                         config=STATE/'coder-integration.json'
-                        config.write_text(json.dumps(current)); config.chmod(0o600)
+                        temporary=config.with_suffix('.tmp');temporary.write_text(json.dumps(current));temporary.chmod(0o600);temporary.replace(config)
                     c.headers['Coder-Session-Token']=current['token']
                 r=await c.request(method,path,**kw)
             if r.status_code>=400:
@@ -77,7 +90,7 @@ class CoderAgents:
             if any(w['id']==workspace_id for w in occupied) or len(occupied)<self.max_running:return
             if any(w['latest_build']['status']=='stopping' for w in occupied):
                 await asyncio.sleep(2);continue
-            protected=self.active|self.provisioning|previews.active_workspaces()
+            protected=self.active|self.native_active|self.provisioning|previews.active_workspaces()
             candidates=[w for w in occupied if w['id'] not in protected and w['latest_build']['status']=='running' and w['template_id']==self.settings()['template_id']]
             candidates.sort(key=lambda w:(w['id']!=self.reserve.record.get('workspace_id'),self.touched.get(w['id'],0)))
             if candidates:
@@ -119,12 +132,12 @@ class CoderAgents:
         code=(ROOT/'sandbox/collect.py').read_text().replace("Path('/workspace/artifacts')", "Path('/home/sandbox/project/artifacts')")
         settings=self.settings()
         env=dict(os.environ,CODER_URL=CODER_URL,CODER_SESSION_TOKEN=settings['token'],CODER_CONFIG_DIR=str(STATE/'coder-service-cli'),CODER_USE_KEYRING='false')
-        p=await asyncio.create_subprocess_exec(str(ROOT/'.local/bin/coder'),'ssh','--disable-autostart',workspace['name'],'--','python -I -c '+shlex.quote(code),env=env,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
+        p=await asyncio.create_subprocess_exec(str(ROOT/'.local/bin/coder'),'ssh','--disable-autostart',workspace['name'],'--','python -I -c '+shlex.quote(script_with_limits(code)),env=env,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
         async def read_limited(stream):
             data=bytearray()
             while chunk:=await stream.read(65536):
                 data.extend(chunk)
-                if len(data)>24_000_000: raise RuntimeError('Artifact collection exceeded output limit')
+                if len(data)>value('ARTIFACT_MAX_TOTAL_BYTES')*2+1000000: raise RuntimeError('Artifact collection exceeded output limit')
             return bytes(data)
         try:
             out,err=await asyncio.wait_for(asyncio.gather(read_limited(p.stdout),read_limited(p.stderr)),45)
@@ -151,6 +164,10 @@ class CoderAgents:
         project=store.ensure_project(thread,context['owner'])
         run['project_id']=project['id'];store.save_run(run)
         async with self.project_locks.setdefault(project['id'],asyncio.Lock()), self.slots:
+            if hasattr(self,'sessions'):
+                current=await self.sessions.for_thread(thread.id,context['owner'])
+                if current and current['active']:
+                    raise RuntimeError('A coding session is still active in this project. Wait for it or use Stop coding below before starting another.')
             run['timings']={'queue_seconds':round(time.monotonic()-started,4)}
             if os.getenv('PROJECT_ENGINE','ori-pi')=='coder-native':
                 from .native_coder import run_native
@@ -172,7 +189,7 @@ class CoderAgents:
         env=dict(os.environ,CODER_URL=CODER_URL,CODER_SESSION_TOKEN=settings['token'],CODER_CONFIG_DIR=str(STATE/'coder-service-cli'),CODER_USE_KEYRING='false')
         try:
             await self.restore_inputs(ws,store,thread.id,input_files or [])
-            request={**issue(ws['id'],seconds=660),'run_id':run['id'],'thread_id':thread.id,'instruction':instruction,'prompt':prompt}
+            request={**issue(ws['id'],seconds=min(3600,value('ORI_RUN_SECONDS')+60)),'timeout_seconds':value('ORI_RUN_SECONDS'),'run_id':run['id'],'thread_id':thread.id,'instruction':instruction,'prompt':prompt}
             from .experiments import experiment
             request=experiment.prepare_agent_request(request)
             wrapper=experiment.agent_wrapper()
@@ -182,7 +199,7 @@ class CoderAgents:
                 while await process.stderr.read(4096): pass
             draining=asyncio.create_task(drain_errors());executions=[];result=None
             try:
-                async with asyncio.timeout(630):
+                async with asyncio.timeout(value('ORI_RUN_SECONDS')+30):
                     while line:=await process.stdout.readline():
                         try: event=json.loads(line)
                         except ValueError: continue

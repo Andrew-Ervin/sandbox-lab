@@ -23,7 +23,7 @@ async def main(request):
         while await process.stderr.read(4096): pass
     draining=asyncio.create_task(drain_errors())
     try:
-        async with asyncio.timeout(600):
+        async with asyncio.timeout(int(request.get('timeout_seconds',600))):
             while line:=await process.stdout.readline():
                 try: event=json.loads(line)
                 except ValueError: continue

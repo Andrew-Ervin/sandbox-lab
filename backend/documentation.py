@@ -8,11 +8,11 @@ TOPICS = {
     'overview': ('docs/ARCHITECTURE-GUIDE.md',),
     'projects': ('docs/PROJECTS.md',),
     'packages': ('docs/PACKAGES.md',),
-    'security': ('docs/SECURITY.md', 'docs/NATIVE_CODER_TRIAL.md'),
-    'scaling': ('docs/SCALING.md',),
+    'security': ('docs/SECURITY.md', 'docs/NATIVE_CODER_TRIAL.md', 'docs/MODEL-ROUTING.md'),
+    'scaling': ('docs/SCALING.md','docs/LIMITS.md'),
     'azure': ('docs/AZURE-IMPLEMENTATION.md',),
     'developer': ('docs/GUI_HARNESSES.md', 'docs/PROJECTS.md'),
-    'setup': ('docs/LOCAL-SETUP.md',),
+    'setup': ('docs/LOCAL-SETUP.md','docs/MODEL-ROUTING.md'),
 }
 MAX_DOCUMENT = 160_000
 MAX_RESULT = 20_000
@@ -25,6 +25,8 @@ def public_configuration():
     return {'model':MODEL,'reasoning':REASONING,'project_engine':os.getenv('PROJECT_ENGINE','ori-pi'),
             'storage':'Local SQLite, artifacts/checkpoints and separate Coder home volumes; no cloud sync',
             'identity':'Single local owner; production Entra integration is not connected',
+            'web_search_enabled':os.getenv('LAB_ALLOW_WEB_SEARCH','true').lower()=='true',
+            'project_sync_seconds':number('PROJECT_SYNC_SECONDS',15),
             'quick_idle_seconds':number('QUICK_IDLE_SECONDS',300),
             'project_idle_seconds':number('PROJECT_IDLE_SECONDS',300),
             'developer_idle_seconds':number('DEVELOPER_IDLE_SECONDS',600),

@@ -1,3 +1,5 @@
+from .limits import validate as validate_limits
+validate_limits()
 import secrets
 import os
 import time
@@ -29,10 +31,13 @@ chat_server = LabChat(store)
 jobs = Jobs(store)
 health = HealthCache()
 idle = IdleWorkspaces(coder,developer,previews)
+from .coding_sessions import CodingSessions
+coding_sessions = CodingSessions(coder,store)
 @asynccontextmanager
 async def lifespan(app):
     store.recover_jobs()
     store.migrate_projects()
+    coding_sessions.seed()
     migration=STATE/'ui-migration-v5.done'
     if not migration.exists():
         # Saved links resolve through authenticated routes, even after a backend restart.
@@ -81,13 +86,15 @@ async def lifespan(app):
     idle_task=asyncio.create_task(idle.maintain())
     reserve_task=asyncio.create_task(coder.reserve.maintain(store))
     deletion_task=asyncio.create_task(project_deletions.maintain())
-    links_task=asyncio.create_task(workspace_links.maintain())
+    links_task=asyncio.create_task(workspace_links.sync.maintain())
+    credential_task=asyncio.create_task(developer.maintain_credentials())
+    coding_task=asyncio.create_task(coding_sessions.maintain())
     links_migration=asyncio.create_task(workspace_links.migrate())
     yield
     await jobs.close()
     await chat_server.close()
-    task.cancel();preview_task.cancel();idle_task.cancel();reserve_task.cancel();deletion_task.cancel();links_task.cancel();links_migration.cancel()
-    await asyncio.gather(task,preview_task,idle_task,reserve_task,deletion_task,links_task,links_migration,return_exceptions=True)
+    task.cancel();preview_task.cancel();idle_task.cancel();reserve_task.cancel();deletion_task.cancel();links_task.cancel();links_migration.cancel();credential_task.cancel();coding_task.cancel()
+    await asyncio.gather(task,preview_task,idle_task,reserve_task,deletion_task,links_task,links_migration,credential_task,coding_task,return_exceptions=True)
     await previews.close()
 app = FastAPI(title='Sandbox Lab', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 sessions = {}
@@ -98,6 +105,7 @@ from .projects import install_projects
 project_deletions=install_projects(app,store,coder,live_containers)
 from .workspace_links import install_workspace_links
 workspace_links=install_workspace_links(app,store,coder,developer)
+chat_server.workspace_links=workspace_links
 ALLOWED_HOSTS = {'127.0.0.1:3000', 'localhost:3000', '127.0.0.1:8787', 'localhost:8787'}
 ALLOWED_ORIGINS = {'http://' + h for h in ALLOWED_HOSTS}
 @app.middleware('http')
@@ -138,10 +146,21 @@ async def status(request: Request):
     app_runs=store.apps(request.state.owner)
     for run in runs+app_runs:
         run['runtime_status']='static' if run.get('preview_artifact') else runtime(run.get('workspace_id'),None,live,'lab-agents') if run.get('workspace_id') else ('running' if any(p['name']==run.get('pod') for p in live['pods']) else 'released')
-    return {'project_reserve':coder.reserve.status(),'containers':live,'idle_policy':{'project_seconds':idle.project_idle,'developer_seconds':idle.developer_idle,'error':idle.error},**infrastructure, 'openrouter':bool(API_KEY), 'model':MODEL, 'reasoning':REASONING, 'coding_engine':os.getenv('PROJECT_ENGINE','ori-pi'), 'pool':compute.status(), 'idle_workspaces_stopped':idle.stopped, 'runs':runs,'apps':app_runs,'jobs':[{k:v for k,v in j.items() if k!='owner'} for j in store.jobs(request.state.owner)]}
+    return {'project_reserve':coder.reserve.status(),'containers':live,'idle_policy':{'project_seconds':idle.project_idle,'developer_seconds':idle.developer_idle,'error':idle.error},**infrastructure, 'openrouter':bool(API_KEY), 'model':MODEL, 'reasoning':REASONING, 'coding_engine':os.getenv('PROJECT_ENGINE','ori-pi'), 'pool':compute.status(), 'credential_renewal':{'developer_error':developer.renewal_error},'idle_workspaces_stopped':idle.stopped, 'runs':runs,'apps':app_runs,'jobs':[{k:v for k,v in j.items() if k!='owner'} for j in store.jobs(request.state.owner)]}
 @app.get('/api/threads')
 async def threads(request: Request):
     return store.thread_summaries(request.state.owner)
+
+@app.get('/api/threads/{thread_id}/coding-session')
+async def coding_session(thread_id:str,request:Request):
+    return await coding_sessions.for_thread(thread_id,request.state.owner)
+
+@app.post('/api/threads/{thread_id}/coding-session/stop')
+async def stop_coding_session(thread_id:str,request:Request):
+    body=await request.json()
+    try:return await coding_sessions.stop(thread_id,request.state.owner,body.get('session_id'))
+    except ValueError as error:raise HTTPException(409,str(error))
+    except RuntimeError as error:raise HTTPException(503,str(error))
 
 @app.get('/api/approval-payload/{thread_id}/{item_id}')
 async def approval_payload(thread_id:str,item_id:str,request:Request):
@@ -181,7 +200,13 @@ async def chatkit(request: Request):
     context={'owner':request.state.owner,'mode':mode}
     result=await chat_server.process(body,context)
     if isinstance(result,StreamingResult):
-        return StreamingResponse(jobs.start(result,context,thread_id),media_type='text/event-stream',headers={'X-Accel-Buffering':'no'})
+        return StreamingResponse(jobs.start(result,context,thread_id,acknowledge=parsed.get('type') in ('threads.create','threads.add_user_message')),media_type='text/event-stream',headers={'X-Accel-Buffering':'no','Cache-Control':'no-cache, no-transform'})
+    if parsed.get('type')=='threads.get_by_id' and jobs.active(request.state.owner,thread_id):
+        # Native ChatKit locks the composer when rejoining a background turn.
+        # This is response-only: saved threads remain writable after completion.
+        document=json.loads(result.json)
+        document['status']={'type':'locked','reason':'A response is still running. Wait for it to finish or use Stop run.'}
+        return JSONResponse(document)
     return Response(content=result.json,media_type='application/json')
 @app.get('/api/artifacts/{run_id}/{filename}')
 async def artifact(run_id: str, filename: str, request: Request):

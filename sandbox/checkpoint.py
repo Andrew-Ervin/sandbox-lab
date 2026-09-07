@@ -1,15 +1,15 @@
 """Bounded regular-file checkpoints inside quick pods. No symlinks or executable state."""
 import base64,os,re,stat
 from pathlib import Path,PurePosixPath
-MAX_FILE=8_000_000
-MAX_TOTAL=16_000_000
+MAX_FILE=int(os.getenv('ARTIFACT_MAX_FILE_BYTES','8000000'))
+MAX_TOTAL=int(os.getenv('ARTIFACT_MAX_TOTAL_BYTES','16000000'))
 SKIP={'artifacts','plots','files','__pycache__','.venv','node_modules','.git'}
 def valid(name):
     parts=PurePosixPath(name).parts
     return bool(parts) and len(parts)<=8 and len(name)<=400 and not name.startswith('/') and all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_. -]{0,159}',p) and '..' not in p for p in parts) and parts[0] not in SKIP
 
 def restore(entries,root='/workspace'):
-    if not isinstance(entries,list) or len(entries)>40:raise ValueError('Invalid quick checkpoint')
+    if not isinstance(entries,list) or len(entries)>int(os.getenv('ARTIFACT_MAX_FILES','40')):raise ValueError('Invalid quick checkpoint')
     total=0
     for entry in entries:
         name=entry.get('name','')
@@ -33,7 +33,7 @@ def collect_checkpoint(root='/workspace'):
                 with os.fdopen(handle,'rb') as f:
                     info=os.fstat(f.fileno())
                     if not stat.S_ISREG(info.st_mode):continue
-                    if info.st_size>MAX_FILE or total+info.st_size>MAX_TOTAL or len(entries)>=40:truncated=True;continue
+                    if info.st_size>MAX_FILE or total+info.st_size>MAX_TOTAL or len(entries)>=int(os.getenv('ARTIFACT_MAX_FILES','40')):truncated=True;continue
                     raw=f.read(MAX_FILE+1)
                 if len(raw)>MAX_FILE or total+len(raw)>MAX_TOTAL:truncated=True;continue
                 entries.append({'name':key,'data':base64.b64encode(raw).decode()});total+=len(raw)

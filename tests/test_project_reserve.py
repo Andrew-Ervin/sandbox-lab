@@ -43,3 +43,17 @@ async def test_speculative_warmup_never_evicts_a_full_project_pool(tmp_path):
     c=SimpleNamespace(api=api,provision_lock=asyncio.Lock(),max_running=1,touched={},settings=lambda:{'template_id':'t','organization_id':'o'})
     reserve=ProjectReserve(c,tmp_path/'reserve.json');reserve.request();await reserve.reconcile(store)
     assert reserve.state=='capacity full' and calls==['GET'] and not reserve.record.get('workspace_id')
+
+@pytest.mark.asyncio
+async def test_deleted_standby_does_not_block_on_demand_allocation(tmp_path):
+    from backend.coder import CoderAPIError
+    from unittest.mock import AsyncMock
+    store=SQLiteStore(tmp_path/'db')
+    api=AsyncMock(side_effect=CoderAPIError(410,'Gone'))
+    c=SimpleNamespace(api=api,provision_lock=asyncio.Lock(),settings=lambda:{'template_id':'t','organization_id':'o'})
+    reserve=ProjectReserve(c,tmp_path/'reserve.json');reserve.record={'workspace_id':'gone'}
+    assert await reserve.claim(None,store,{}) is None
+    assert not reserve.record.get('workspace_id')
+    reserve.record={'workspace_id':'gone'}
+    await reserve.reconcile(store)
+    assert not reserve.record.get('workspace_id') and reserve.state=='asleep'

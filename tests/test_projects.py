@@ -146,7 +146,10 @@ async def test_project_routes_enforce_owner_and_create_shared_chat(tmp_path):
     @app.middleware('http')
     async def identity(request:Request,next):request.state.owner=request.headers.get('test-owner','alice');return await next(request)
     async def live():return {'pods':[],'unavailable_namespaces':[]}
-    install_projects(app,s,SimpleNamespace(project_locks={}),SimpleNamespace(get=live))
+    coder=SimpleNamespace(project_locks={},active=set(),provisioning=set())
+    install_projects(app,s,coder,SimpleNamespace(get=live))
+    from backend.workspace_links import install_workspace_links
+    install_workspace_links(app,s,coder,SimpleNamespace())
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test') as client:
         for method,path in [('GET','files'),('GET','file?path=main.py'),('POST','open'),('POST','threads'),('POST','sync-onedrive')]:
             assert (await client.request(method,f'/api/projects/{p["id"]}/{path}',headers={'test-owner':'bob'})).status_code==404

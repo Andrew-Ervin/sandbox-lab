@@ -1,3 +1,7 @@
+# Validation record
+
+Current behavior supersedes historical transfer experiments below: source now synchronizes automatically on handoff and every 15 seconds while both linked workspaces run. Same-file conflicts require a user choice; packages, credentials and processes stay separate. No source-copy review step remains.
+
 # Validation for the enterprise-hardening revision
 
 Validated locally on macOS ARM64 with the existing kind/Calico/Coder installation. This is a record of checks, not a production security certification.
@@ -61,7 +65,7 @@ Full local logs and session identifiers stay under ignored .local or private doc
 - Real Coder SSH transport copied synthetic files from an existing headless workspace to an existing developer workstation and back into separate temporary import folders. Exact file bytes and unchanged originals were checked; all temporary fixture directories were removed. This exercised transport and import/export against real pods; the full review/approve flow is covered by isolated tests, not an approval click against user source.
 - Linked all five existing developer workstations to project records. All five new project records still have no headless allocation. Existing 16 projects and 44 conversations, all 390 original message items, and non-widget message content were compared with a private backup and preserved. Only 103 widget payloads were refreshed; item identities and timestamps remain intact.
 - Chat history now fetches only one page from SQLite. Secondary UI collections load on demand; ChatKit and conversation loads have placeholders. The local watcher excludes infrastructure, backend, report and test trees to avoid needless front-end reloads during non-UI work.
-- Copies are human-reviewed source snapshots, not automatic mirroring: up to 2,000 files, 8 MB each, 32 MB total. Reviews expire after five minutes; there are at most two pending/preparing reviews globally and three retained import folders per destination. A fourth import is refused until the user moves/removes older imports. No older source is deleted automatically.
+- Historical reviewed snapshot transfers have been superseded by bounded ongoing three-way source sync; legacy import directories remain supported.
 - The architecture reference HTML and Azure guide were refreshed in the existing reference app. The native Coder trial rollback snapshots retain these independent UI/project improvements.
 
 ### Final project, approval and assistant pass
@@ -84,5 +88,29 @@ Full local logs and session identifiers stay under ignored .local or private doc
 - 177 Python tests and seven polling tests pass; TypeScript and the production build pass. Added coverage for deterministic source-copy reuse, preserving developer edits at the import cap, rejecting symlinked copies, scoped return exports, bounded editor folder URLs, and fast failure of a failed Coder build.
 - Browser verification started a developer workstation directly from an existing Go project chat, automatically copied nine source files, opened the copied folder, and displayed main.go in VS Code with Pi Chat. The header action, preview-width menu, and exclusive history/preview controls were exercised. Reopening reused the same copy; the developer App preview launched from that folder and its Add one button changed the count from 0 to 1. No model request or user source edit was needed.
 - The cold-start test exposed two infrastructure limits: five retained developer PVCs exhausted the old 10 GiB quota, and native extension installation exhausted 256 MiB of /tmp. Local developer capacity is now configurable (40 GiB / 20 retained homes by default, still three running pods). GUI scratch is 1 GiB with a 2 GiB ephemeral-storage limit; headless scratch is unchanged. Failed builds stop preparation promptly, and extension installers are removed in a finally block.
-- Open in VS Code is the explicit outbound source-copy action. Unchanged source reuses its existing developer copy without replacing editor edits; changed source creates a new copy, subject to the existing three-import limit. Copy to chat remains reviewed and reads the folder opened in the editor. Dependencies and execution remain separate.
+- Open in VS Code and project chat entry now synchronize eligible source automatically, with ongoing comparison while both workspaces run. Dependencies and execution remain separate.
 - Updated the source documentation and existing architecture reference files without regenerating conversations. Private data and the MCP experiment remain excluded from commits.
+
+
+## Dictation, source handoff and message lifecycle
+
+- Browser-format diagnosis with synthetic speech: OpenRouter returned HTTP 400 for WebM and HTTP 200 for PCM WAV. The real developer pod's authenticated transcription bridge returned the synthetic sentence after the fix; its installed Pi Chat bundle contains WAV conversion, the five-minute timer and 10 MB limit. Hardware microphone capture was not automated.
+- Runtime limits are centralized in `config/limits.env`; `docs/LIMITS.md` also catalogs infrastructure settings, fixed safety ceilings, deployment steps and retention gaps. Only explicit public numeric limits are forwarded into quick pods and trusted source helpers; operator secrets are not forwarded.
+- Reviewed developer-to-chat import can create a separate headless home after approval. Review/cancel alone allocates no headless compute. Restarts and lost replies can reuse a committed import without overwriting developer edits.
+- Queued chat acknowledges its saved user message before acquiring a worker. Submission locks cover the interval before response-start events, independent threads remain concurrent, and a background conversation returns ChatKit's native locked status until completion. Idle transcripts no longer refresh continuously. OpenRouter's HTTP-200 error envelopes receive bounded transient retries; the main assistant uses a configurable 4,096-token output budget rather than reserving 16,000 by default.
+- Live Go preview resumed and its Add one control changed the counter. The linked developer workstation reopened its source with Pi Chat on the right. Further browser results are recorded below.
+
+## Final local regression pass — 2026-09-07
+
+- Main-chat OpenRouter Exa search returned a cited Rust documentation answer. The native ChatKit Sources control displayed three source entries with URLs, titles and excerpts; ordinary search created no workspace.
+- Quick Python completed a 1,000-dice chart with inline PNG and an interactive artifact after scoped Kubernetes broker-token renewal. Direct user-code Plotly `write_image` can hit the quick process file limit; use `show()`/self-contained HTML for the supervised renderer or delegate richer exports to a project.
+- Rust project → new chat automatically copied eligible GUI source. Chat ran the two existing Rust library tests successfully. Project → Open in VS Code reopened the linked Pi sidebar and project files. Automatic source edits were verified in both directions, including tracked deletion propagation.
+- Native Coder activity expanded to actual tool arguments, success/failure, provider-returned reasoning and token counts. Nested output code fences are preserved in the card.
+- Stop coding was exercised in the browser. The initial native interrupt left a shell child alive, so the implementation now interrupts the turn **and stops headless compute**. The repeated test removed the headless pod while the separate GUI pod remained running. Saved source persists; app reopening restarts its workspace without model inference.
+- The probability app opened in the side preview through the corrected ChatKit app deeplink. Later completion/retrieval errors no longer remove the persistent Open app affordance or misclassify already completed work.
+- A live Pi runtime picked up a renewed scoped credential without restarting. Synthetic speech passed through the actual workstation transcription bridge after WAV conversion. Physical microphone capture was not automated.
+- Automated validation: 212 Python tests, 10 JavaScript tests, TypeScript checking and the production build passed. ChatKit emits existing named-widget deprecation warnings. The new code-session component passes its focused lint check; the broader frontend still has existing React-compiler lint findings.
+
+Remaining production limits: single-owner local sessions, process-local coordination and SQLite; no complete clean-machine Linux/WSL2 qualification; no production Entra/OPA/MCP approval deployment. See the Azure plan for shared leases, durable jobs, governed storage, audit retention and per-turn process termination.
+
+The final Rust-app reopen initially reproduced `vite: not found` after source-only sync. Automatic lockfile-based npm restore fixed it, and the live Matrix Lab UI loaded inside the app preview. A focused restore regression test passed; the final suite includes 212 Python tests.

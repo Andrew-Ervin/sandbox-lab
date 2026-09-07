@@ -8,7 +8,7 @@ class Jobs:
         self.slots = asyncio.Semaphore(concurrency or max(1,int(os.getenv("JOB_CONCURRENCY","8"))))
         self.max_pending=max(1,int(os.getenv("JOB_MAX_PENDING","64")))
 
-    def start(self, stream, context, thread_id=None):
+    def start(self, stream, context, thread_id=None, *, acknowledge=False):
         if len(self.tasks)>=self.max_pending: raise RuntimeError('The local job queue is full; retry after a running task finishes.')
         job = {'id': 'job_'+uuid.uuid4().hex, 'thread_id': thread_id, 'owner': context['owner'],
                'status': 'queued', 'started': time.time(), 'progress': 'Waiting for capacity'}
@@ -19,10 +19,20 @@ class Jobs:
 
         async def produce():
             try:
+                iterator=stream.__aiter__()
+                if acknowledge:
+                    # Persist and acknowledge the user message before waiting for a
+                    # worker. ChatKit emits stream_options before invoking respond.
+                    async for chunk in iterator:
+                        event=json.loads(chunk[6:]) if chunk.startswith(b'data: ') else {}
+                        tid=event.get('thread',{}).get('id') or event.get('item',{}).get('thread_id')
+                        if tid:job['thread_id']=tid;self.store.save_job(job)
+                        if attached:queue.put_nowait(chunk)
+                        if event.get('type')=='stream_options':break
                 async with self.slots:
                     job.update(status='running', progress='Working')
                     self.store.save_job(job)
-                    async for chunk in stream:
+                    async for chunk in iterator:
                         if chunk.startswith(b'data: '):
                             previous = dict(job)
                             event = json.loads(chunk[6:])

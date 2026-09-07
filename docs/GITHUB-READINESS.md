@@ -14,7 +14,8 @@ Before a commit:
 python3 scripts/repo_audit.py
 # Optional local pre-commit protection; versioned hook is supplied.
 git config core.hooksPath .githooks
-git add .
+# Stage only the reviewed source files by explicit filename.
+git add -- path/to/reviewed-file
 python3 scripts/repo_audit.py --staged
 git diff --cached --stat
 git diff --cached

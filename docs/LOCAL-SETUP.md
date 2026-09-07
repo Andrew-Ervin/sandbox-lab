@@ -27,7 +27,7 @@ bash scripts/download_tools.sh
 bash scripts/setup.sh
 ```
 
-The local key/domain settings are not enterprise authentication. Privacy routing now requires a ZDR-eligible provider for the chosen model and denies providers collecting data. Requests fail if no compatible provider is available; do not weaken the control to pass a smoke test. `LAB_ALLOW_WEB_SEARCH=true` preserves the lab's approved Exa search; set false for projects where search disclosure is inappropriate, apply secrets and restart the gateway.
+The local key/domain settings are not enterprise authentication. Model routing defaults are in `config/models.env`: prefer AWS/OpenAI, exclude Azure for model requests, deny data collection, and temporarily disable ZDR. Enable `OPENROUTER_REQUIRE_ZDR=true` when required; it then fails closed if no eligible provider is available. See `MODEL-ROUTING.md` for applying settings to all three inference paths. `LAB_ALLOW_WEB_SEARCH=true` preserves the lab's approved Exa search; set false for projects where search disclosure is inappropriate, apply secrets and restart the gateway.
 
 All Kubernetes commands in scripts use `.local/kubeconfig`; normal user kubeconfig is not replaced. Use the default local Docker context matching the host architecture. Cross-builds require fetching both sets of assets explicitly and testing native dependencies; the bootstrap intentionally does not silently run emulated mixed-architecture workspaces.
 

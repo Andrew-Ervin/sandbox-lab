@@ -29,7 +29,7 @@ Open `http://127.0.0.1:3000`. The launcher also maintains local Coder connection
 | Developer workstation | User opens/creates a linked workstation | Independent home with VS Code, terminal, Pi/Ori and app previews | Ten idle minutes; stop preserves files |
 | App preview | User opens an app | Process in its owning workspace; static artifacts need no workspace | Preview leases expire independently; reopening wakes compute without a chat message |
 
-Open in VS Code copies project source and opens that folder in a separate developer workstation. Reopening unchanged source preserves developer edits; returning changes to chat requires a reviewed copy. Credentials, installed dependencies and processes stay separate. See [projects and sync](docs/PROJECTS.md).
+Open in VS Code and project-chat entry automatically synchronize source between separate workstations. Saved changes continue to sync every 15 seconds while both run; conflicting edits are kept for a user choice. Credentials, installed dependencies and processes stay separate. See [projects and sync](docs/PROJECTS.md).
 
 The source default is `PROJECT_ENGINE=ori-pi`: Pi runs through Ori inside a headless Coder workspace. The **optional native Coder Agents engine**, used in the current local trial, runs inference in Coder's control plane and keeps model credentials/routes out of headless code. Configure it using [the native engine guide](docs/NATIVE_CODER_TRIAL.md). GUI workstations remain Pi/Ori independently of that choice.
 
@@ -62,3 +62,9 @@ python3 scripts/repo_audit.py
 The [sharing checklist](docs/GITHUB-READINESS.md) explains exact-index scanning and source-only exports. Personal conversations, generated user apps, artifacts, credentials, databases, private approval experiments and dependency caches remain ignored. The generic approval card renderer is included; the mock-email MCP server is not. Clean installs disable that experiment.
 
 Preserve the included upstream Pi Chat license and attribution. Choose an organization-approved license before distributing the project beyond the team. The checked-in HTML is the generic reference guide, not an export of personal chat history.
+
+Operational limits, deployment steps and retention ceilings are cataloged in [docs/LIMITS.md](docs/LIMITS.md). Public runtime defaults live in `config/limits.env`; private environment overrides stay out of Git.
+
+Model routing and the temporary ZDR policy: [MODEL-ROUTING.md](docs/MODEL-ROUTING.md), configured in `config/models.env`.
+
+Main chat supports OpenRouter Exa search with native ChatKit citations. See [model routing and search](docs/MODEL-ROUTING.md) for administrator controls.

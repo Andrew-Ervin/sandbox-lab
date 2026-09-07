@@ -1,12 +1,12 @@
 """Read-only source browser/export. Never follows symlinks or executes project code."""
-import os,stat,json,sys,base64
+import os,stat,json,sys,base64,hashlib
 ROOT='/home/sandbox/project'
 DEPENDENCIES={'node_modules','.venv','venv','__pycache__','.git','.cache','target'}
 GENERATED={'dist','build','bin','obj'}
-MAX_FILE=8_000_000
-MAX_TOTAL=32_000_000
-MAX_FILES=2000
-MAX_ENTRIES=10000
+MAX_FILE=int(os.getenv('SYNC_MAX_FILE_BYTES','8000000'))
+MAX_TOTAL=int(os.getenv('SYNC_MAX_TOTAL_BYTES','32000000'))
+MAX_FILES=int(os.getenv('SYNC_MAX_FILES','2000'))
+MAX_ENTRIES=int(os.getenv('SYNC_MAX_ENTRIES','10000'))
 
 def bounded_names(fd,limit):
     # Bound allocation before sorting, including excluded names in the budget.
@@ -78,9 +78,9 @@ def execute(request,root_path=ROOT):
         if action=='read':
             raw=read_file(root,path)
             return {'path':path,'data':base64.b64encode(raw).decode(),'size':len(raw)}
-        if action=='export':
+        if action in ('export','manifest'):
             base=path
-            files=[];skipped=0;size=0;visited=0
+            files=[];blocked=[];skipped=0;size=0;visited=0
             def walk(path):
                 nonlocal skipped,size,visited
                 fd=open_path(root,path,True)
@@ -94,14 +94,16 @@ def execute(request,root_path=ROOT):
                         st=os.stat(name,dir_fd=fd,follow_symlinks=False)
                         if stat.S_ISDIR(st.st_mode):walk(entry)
                         elif stat.S_ISREG(st.st_mode):
-                            if st.st_size>MAX_FILE:skipped+=1;continue
+                            if st.st_size>MAX_FILE:skipped+=1;blocked.append(relative);continue
                             raw=read_file(root,entry)
                             if len(files)>=MAX_FILES or size+len(raw)>MAX_TOTAL:raise ValueError('Mock sync exceeds 2,000 files or 32 MB; previous copy was retained')
-                            size+=len(raw);files.append({'path':relative,'data':base64.b64encode(raw).decode()})
-                        else:skipped+=1
+                            size+=len(raw);item={'path':relative,'sha256':hashlib.sha256(raw).hexdigest(),'bytes':len(raw),'mode':stat.S_IMODE(st.st_mode)&0o700}
+                            if action=='export':item['data']=base64.b64encode(raw).decode()
+                            files.append(item)
+                        else:skipped+=1;blocked.append(relative)
                 finally:os.close(fd)
             walk(base)
-            return {'files':files,'excluded':skipped,'bytes':size}
+            return {'files':files,'blocked':blocked,'excluded':skipped,'bytes':size}
         raise ValueError('Unknown project operation')
     finally:os.close(root)
 

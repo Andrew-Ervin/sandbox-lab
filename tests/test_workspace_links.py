@@ -79,42 +79,42 @@ def transfer_setup(tmp_path):
     links.browser.workspace=AsyncMock(return_value={'id':'headless','name':'ai'})
     links.browser.read=AsyncMock(side_effect=[{'files':[file()]},{'files':[file(raw=b'original')]}])
     links.browser.invoke=AsyncMock(return_value={'path':'.lab/imports/test','file_count':1,'bytes':9})
+    links.sync.run=AsyncMock(return_value={'state':'synced','file_count':1})
     return store,p,links
 
 @pytest.mark.asyncio
-async def test_sync_review_does_not_write_and_approval_is_owner_bound(transfer_setup):
+async def test_start_chat_automatically_copies_gui_files_and_keeps_workspaces_separate(transfer_setup):
     store,p,links=transfer_setup
-    plan=await links.plan(p['id'],'alice','to_chat')
-    assert plan['files'][0]['change']=='different'
-    links.browser.invoke.assert_not_awaited()
-    with pytest.raises(HTTPException) as e:await links.apply(p['id'],'bob',plan['id'])
+    result=await links.start_chat(p['id'],'alice')
+    thread=await store.load_thread(result['id'],{'owner':'alice'})
+    assert thread.metadata['workspace_entry_synced'] is True
+    links.sync.run.assert_awaited_once()
+    saved=store.get_project(p['id'],'alice')
+    assert saved['workspace_id']=='headless' and saved['developer_workspace_id']=='dev'
+    with pytest.raises(HTTPException) as e:await links.start_chat(p['id'],'bob')
     assert e.value.status_code==404
-    result=await links.apply(p['id'],'alice',plan['id'])
-    assert result['direction']=='to_chat'
-    ws,script,payload,dev=links.browser.invoke.call_args.args
-    assert ws['id']=='headless' and dev is None and payload['files'][0]['sha256']==file()['sha256']
-    assert plan['id'] not in links.plans
-    assert store.get_project(p['id'],'alice')['workspace_sync']['file_count']==1
 
 @pytest.mark.asyncio
-async def test_sync_rejects_expiry_changed_links_and_active_execution(transfer_setup):
-    store,p,links=transfer_setup;plan=await links.plan(p['id'],'alice','to_developer')
-    links.coder.active.add('headless')
-    with pytest.raises(HTTPException) as e:await links.apply(p['id'],'alice',plan['id'])
-    assert e.value.status_code==409;links.coder.active.clear()
-    with store.db:store.db.execute('UPDATE projects SET developer_workspace_id=? WHERE id=?',('changed',p['id']))
-    with pytest.raises(HTTPException) as e:await links.apply(p['id'],'alice',plan['id'])
-    assert e.value.status_code==409
-    links.plans[plan['id']]['expires']=time.monotonic()-1
-    with pytest.raises(HTTPException) as e:await links.apply(p['id'],'alice',plan['id'])
-    assert e.value.status_code==404;links.browser.invoke.assert_not_awaited()
-
-@pytest.mark.asyncio
-async def test_sync_cannot_allocate_a_chat_workspace(transfer_setup):
+async def test_start_chat_allocates_only_when_gui_has_source(transfer_setup):
     store,p,links=transfer_setup
     with store.db:store.db.execute('UPDATE projects SET workspace_id=NULL WHERE id=?',(p['id'],))
-    with pytest.raises(HTTPException) as e:await links.plan(p['id'],'alice','to_chat')
-    assert e.value.status_code==409;links.browser.workspace.assert_not_awaited()
+    result=await links.start_chat(p['id'],'alice')
+    links.browser.workspace.assert_awaited_once()
+    assert result['id'] in [t['id'] for t in store.projects('alice')[0]['threads']]
+    links.browser.workspace.reset_mock();links.browser.read=AsyncMock(return_value={'files':[]})
+    await links.start_chat(p['id'],'alice')
+    links.browser.workspace.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_failed_or_busy_handoff_does_not_leave_empty_chats(transfer_setup):
+    store,p,links=transfer_setup
+    links.coder.active.add('headless')
+    with pytest.raises(HTTPException) as e:await links.start_chat(p['id'],'alice')
+    assert e.value.status_code==409
+    assert store.projects('alice')[0]['threads']==[]
+    links.coder.active.clear();links.sync.run.side_effect=RuntimeError('transport failed')
+    with pytest.raises(RuntimeError):await links.start_chat(p['id'],'alice')
+    assert store.projects('alice')[0]['threads']==[]
 
 def test_source_validation_checks_duplicates_and_credentials():
     with pytest.raises(ValueError):checked_files({'files':[file(),file()]})
@@ -148,24 +148,12 @@ async def test_open_project_developer_rejects_archive_and_busy_project(transfer_
 
 
 @pytest.mark.asyncio
-async def test_open_project_copies_source_and_returns_exact_editor_folder(transfer_setup):
+async def test_open_project_syncs_before_returning_editor_folder(transfer_setup):
     store,p,links=transfer_setup
-    links.browser.read=AsyncMock(return_value={'files':[file()]})
-    async def publish(ws,script,payload,developer):
-        assert ws['id']=='dev' and developer is links.developer
-        assert payload['reuse'] is True and payload['files'][0]['sha256']==hashlib.sha256(base64.b64decode(payload['files'][0]['data'])).hexdigest()
-        return {'path':'.lab/imports/'+payload['id'],'file_count':1,'bytes':9}
-    links.browser.invoke=AsyncMock(side_effect=publish)
-    first=await links.open_developer(p['id'],'alice')
-    second=await links.open_developer(p['id'],'alice')
-    assert first['source_path']==second['source_path']
-    assert first['source_path'].startswith('.lab/imports/transfer_')
-    assert links.browser.read.await_count==2  # No destination export or separate review.
+    result=await links.open_developer(p['id'],'alice')
+    assert result['source_path']==''
+    links.sync.run.assert_awaited_once()
     assert store.get_project(p['id'],'alice')['workspace_id']=='headless'
-    assert store.get_project(p['id'],'alice')['workspace_sync']['direction']=='to_developer'
-    links.browser.read.return_value={'files':[file(raw=b'updated source')]}
-    third=await links.open_developer(p['id'],'alice')
-    assert third['source_path']!=first['source_path']
 
 
 def test_reopening_identical_snapshot_preserves_developer_edits_at_capacity(tmp_path,importer):
@@ -195,10 +183,11 @@ def test_editor_folder_is_bounded_to_copied_source():
 
 
 @pytest.mark.asyncio
-async def test_return_copy_reads_opened_developer_folder_and_retains_it(transfer_setup):
-    store,p,links=transfer_setup;path='.lab/imports/transfer_'+'a'*32
-    with store.db:store.db.execute('UPDATE projects SET workspace_sync=? WHERE id=?',(json.dumps({'developer_source_path':path}),p['id']))
-    plan=await links.plan(p['id'],'alice','to_chat')
-    assert links.browser.read.call_args_list[0].kwargs['path']==path
-    await links.apply(p['id'],'alice',plan['id'])
-    assert store.get_project(p['id'],'alice')['workspace_sync']['developer_source_path']==path
+async def test_legacy_source_folders_are_kept_during_automatic_sync(transfer_setup):
+    store,p,links=transfer_setup;devpath='.lab/imports/transfer_'+'a'*32;chatpath='.lab/imports/transfer_'+'b'*32
+    with store.db:store.db.execute('UPDATE projects SET workspace_sync=? WHERE id=?',(json.dumps({'developer_source_path':devpath,'chat_source_path':chatpath}),p['id']))
+    await links.start_chat(p['id'],'alice')
+    assert links.browser.read.call_args_list[0].kwargs['path']==devpath
+    result=await links.open_developer(p['id'],'alice')
+    assert result['source_path']==devpath
+    assert links.paths(links.sync.run.call_args.args[0])==(chatpath,devpath)

@@ -1,12 +1,5 @@
 'use client';
-import { useRef, useState } from 'react';
-import {
-  ArrowDownToLine,
-  FolderOpen,
-  LoaderCircle,
-  Monitor,
-  Terminal,
-} from 'lucide-react';
+import { useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -14,29 +7,14 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { FolderOpen, Monitor, Terminal, LoaderCircle } from 'lucide-react';
 import { StatePill } from '@/components/state-pill';
 import type { Project, Workspace } from '@/lib/lab-types';
 import { OpenProjectWorkspaceButton } from '@/components/open-project-workspace';
-
 type Fetch = (
   input: RequestInfo | URL,
   init?: RequestInit,
 ) => Promise<Response>;
-type Plan = {
-  id: string;
-  direction: 'to_chat' | 'to_developer';
-  path: string;
-  bytes: number;
-  excluded: number;
-  files: {
-    path: string;
-    bytes: number;
-    change: 'new' | 'different' | 'unchanged';
-  }[];
-};
-const bytes = (n: number) =>
-  n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : (n / 1000).toFixed(1) + ' KB';
-
 
 export function WorkspaceSync({
   project,
@@ -49,85 +27,36 @@ export function WorkspaceSync({
   onRefresh: () => unknown;
   onOpenDeveloper: (ws: Workspace) => void;
 }) {
-  const [opened, setOpened] = useState(false),
-    [busy, setBusy] = useState(false),
-    [plan, setPlan] = useState<Plan | null>(null),
-    [error, setError] = useState(''),
-    [success, setSuccess] = useState('');
-  const generation = useRef(0);
-  async function request<T>(path: string, body: unknown): Promise<T> {
-    const r = await sessionFetch(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = (await r.json()) as T & { detail?: string };
-    if (!r.ok) throw Error(data.detail || 'Workspace request failed');
-    return data;
-  }
-  function close() {
-    generation.current++;
-    setOpened(false);
-    setPlan(null);
-    setError('');
-    if (plan)
-      void sessionFetch(
-        `/api/projects/${project.id}/workspace-sync/${plan.id}`,
-        { method: 'DELETE' },
-      );
-  }
-  async function review(direction: Plan['direction']) {
-    const requestId = ++generation.current;
-    setOpened(true);
-    setBusy(true);
-    setError('');
-    setPlan(null);
-    setSuccess('');
+  const last = project.workspace_sync;
+  const [resolving, setResolving] = useState('');
+  const [syncError, setSyncError] = useState('');
+  async function resolve(path: string, keep: 'chat' | 'developer') {
+    if (resolving) return;
+    setResolving(path);
+    setSyncError('');
     try {
-      const next = await request<Plan>(
-        `/api/projects/${project.id}/workspace-sync/plan`,
-        { direction },
+      const response = await sessionFetch(
+        `/api/projects/${project.id}/source-sync/resolve`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path, keep }),
+        },
       );
-      if (requestId === generation.current) setPlan(next);
-      else
-        void sessionFetch(
-          `/api/projects/${project.id}/workspace-sync/${next.id}`,
-          { method: 'DELETE' },
-        );
-    } catch (e) {
-      if (requestId === generation.current) setError((e as Error).message);
-    } finally {
-      if (requestId === generation.current) setBusy(false);
-    }
-  }
-  async function apply() {
-    if (!plan) return;
-    setBusy(true);
-    setError('');
-    try {
-      const result = await request<{ path: string; file_count: number }>(
-        `/api/projects/${project.id}/workspace-sync/apply`,
-        { plan_id: plan.id },
-      );
-      setSuccess(
-        `${result.file_count} files copied to ${plan.direction === 'to_chat' ? 'the chat sandbox' : 'VS Code'}: ${result.path}`,
-      );
-      setPlan(null);
-      setOpened(false);
+      const data = (await response.json()) as { detail?: string };
+      if (!response.ok)
+        throw Error(data.detail || 'Could not resolve this file');
       await onRefresh();
     } catch (e) {
-      setError((e as Error).message);
+      setSyncError((e as Error).message);
     } finally {
-      setBusy(false);
+      setResolving('');
     }
   }
-  const last = project.workspace_sync;
   return (
     <section className="workspace-connection">
       <div className="workspace-connection-header">
-        <div>
-          <h2>Developer workstation</h2>
-        </div>
+        <h2>Developer workstation</h2>
       </div>
       <div className="workspace-pair">
         <div>
@@ -136,8 +65,8 @@ export function WorkspaceSync({
             <strong>Chat sandbox</strong>
             <small>
               {project.workspace_id
-                ? 'Project chats share this source tree'
-                : 'Created when a chat needs project compute'}
+                ? 'Shared by project chats'
+                : 'Starts when source or coding needs it'}
             </small>
           </span>
           <StatePill state={project.status} />
@@ -146,115 +75,64 @@ export function WorkspaceSync({
           <Monitor size={19} />
           <span>
             <strong>{project.developer_name || 'Developer workstation'}</strong>
-            <small>VS Code · your own packages and processes</small>
+            <small>VS Code · separate packages and processes</small>
           </span>
           <StatePill state={project.developer_status || 'unknown'} />
         </div>
       </div>
       <div className="workspace-sync-actions">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!project.workspace_id || busy}
-          onClick={() => void review('to_chat')}
-        >
-          <ArrowDownToLine size={15} /> Copy to chat
-        </Button>
-        <OpenProjectWorkspaceButton project={project} sessionFetch={sessionFetch} onRefresh={onRefresh} onOpen={onOpenDeveloper} />
+        <OpenProjectWorkspaceButton
+          project={project}
+          sessionFetch={sessionFetch}
+          onRefresh={onRefresh}
+          onOpen={onOpenDeveloper}
+        />
       </div>
       <p className="workspace-sync-help">
-        Opening VS Code copies and opens your project source automatically.
-        Existing developer edits are preserved. Review changes before copying
-        them back to chat; packages and execution remain separate.
+        Source files sync automatically while both workspaces are running, and
+        catch up when you open either environment. Packages, credentials and
+        processes remain separate.
       </p>
-      {!project.workspace_id && (
-        <p className="workspace-sync-help">
-          Start a project chat and ask it to use a coding workspace to enable
-          file transfers.
-        </p>
-      )}
-      {(success || last) && (
+      {last && (
         <p className="workspace-sync-result" role="status">
           <FolderOpen size={14} />
-          {success ||
-            `${last!.file_count} files copied ${last!.direction === 'to_chat' ? 'to chat' : 'to VS Code'} · ${new Date(last!.at * 1000).toLocaleString()}`}
+          {last.state === 'conflict'
+            ? `${last.conflict_count} file conflicts`
+            : last.state === 'retrying'
+              ? 'Sync will retry'
+              : `${last.file_count} source files synced`}{' '}
+          · {new Date(last.at * 1000).toLocaleTimeString()}
         </p>
       )}
-      <Dialog
-        open={opened}
-        onOpenChange={(open) => {
-          if (!open && !busy) close();
-        }}
-      >
-        <DialogContent className="sync-review-dialog" showCloseButton={!busy}>
-          <DialogTitle>Review workspace sync</DialogTitle>
-          <DialogDescription>
-            Copy source into a new import folder. Nothing in the destination’s
-            live source tree will be overwritten.
-          </DialogDescription>
-          {busy && !plan ? (
-            <div className="sync-preparing">
-              <LoaderCircle className="spin" />
-              <strong>Preparing a file comparison</strong>
-              <p>Sleeping environments may take a moment to wake.</p>
-            </div>
-          ) : null}
-          {error && (
-            <p className="project-error" role="alert">
-              {error}
-            </p>
-          )}
-          {plan && (
-            <>
-              <div className="sync-summary">
-                <strong>
-                  {plan.direction === 'to_chat'
-                    ? 'VS Code → Chat sandbox'
-                    : 'Chat sandbox → VS Code'}
-                </strong>
-                <span>
-                  {plan.files.length} files · {bytes(plan.bytes)} ·{' '}
-                  {plan.excluded} excluded
-                </span>
-              </div>
-              <div className="sync-file-list">
-                {plan.files.map((file) => (
-                  <div key={file.path}>
-                    <code>{file.path}</code>
-                    <span data-change={file.change}>
-                      {file.change === 'different'
-                        ? 'Differs from live file'
-                        : file.change === 'unchanged'
-                          ? 'Matches live file'
-                          : 'New file'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <p className="workspace-sync-help">
-                Destination: <code>{plan.path}</code>. Review expires after five
-                minutes. Up to three imports can be retained in each
-                environment; move or remove older imports before adding more.
-              </p>
-            </>
-          )}
-          <div className="sync-review-actions">
-            <Button variant="ghost" disabled={busy} onClick={close}>
-              Cancel
+      {last?.conflicts?.map((path) => (
+        <div className="source-sync-conflict" key={path}>
+          <code>{path}</code>
+          <span>Changed on both sides</span>
+          <div>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!!resolving}
+              onClick={() => void resolve(path, 'chat')}
+            >
+              Keep chat
             </Button>
-            {plan && (
-              <Button disabled={busy} onClick={() => void apply()}>
-                {busy ? (
-                  <LoaderCircle size={15} className="spin" />
-                ) : (
-                  <ArrowDownToLine size={15} />
-                )}{' '}
-                Copy reviewed files
-              </Button>
-            )}
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!!resolving}
+              onClick={() => void resolve(path, 'developer')}
+            >
+              Keep VS Code
+            </Button>
           </div>
-        </DialogContent>
-      </Dialog>
+        </div>
+      ))}
+      {(syncError || last?.error) && (
+        <p className="project-error" role="alert">
+          {syncError || last?.error}
+        </p>
+      )}
     </section>
   );
 }
@@ -291,8 +169,9 @@ export function LinkWorkspace({
         <DialogContent>
           <DialogTitle>Project for {workspace.name}</DialogTitle>
           <DialogDescription>
-            Link this workstation to a project. Its files and permissions stay
-            separate from chat compute; transfers are explicit.
+            Link this workstation to a project. Its source files sync
+            automatically with chat compute; credentials, packages and processes
+            stay separate.
           </DialogDescription>
           <select
             className="project-select"
@@ -371,8 +250,20 @@ export function OpenProjectWorkspace({
   onRefresh: () => unknown;
   onOpen: (ws: Workspace) => void;
 }) {
-  return <section className="project-workstation-entry">
-    <div><strong>Work on this project in VS Code</strong><p>Your source opens automatically in a separate developer workstation.</p></div>
-    <OpenProjectWorkspaceButton project={project} sessionFetch={sessionFetch} onRefresh={onRefresh} onOpen={onOpen} />
-  </section>;
+  return (
+    <section className="project-workstation-entry">
+      <div>
+        <strong>Work on this project in VS Code</strong>
+        <p>
+          Your source opens automatically in a separate developer workstation.
+        </p>
+      </div>
+      <OpenProjectWorkspaceButton
+        project={project}
+        sessionFetch={sessionFetch}
+        onRefresh={onRefresh}
+        onOpen={onOpen}
+      />
+    </section>
+  );
 }

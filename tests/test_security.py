@@ -17,7 +17,9 @@ def test_quick_pod_is_restricted_and_ephemeral():
     assert c['securityContext']['readOnlyRootFilesystem'] is True
     assert c['securityContext']['allowPrivilegeEscalation'] is False
     assert all('emptyDir' in v for v in p['volumes'])
-    assert not c.get('env') and not c.get('envFrom')
+    assert not c.get('envFrom')
+    assert all(e['value'].isdigit() and e['name'].startswith(('SYNC_','ARTIFACT_','QUICK_')) for e in c.get('env',[]))
+    assert not any('TOKEN' in e['name'] or 'KEY' in e['name'] for e in c.get('env',[]))
     assert c['resources']['limits']['memory']=='768Mi'
 
 @pytest.mark.asyncio

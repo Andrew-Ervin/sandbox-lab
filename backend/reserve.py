@@ -26,7 +26,10 @@ class ProjectReserve:
         if not wid:return None
         if self.attached(store,wid):
             self.record.pop('workspace_id',None);self.save();return None
-        ws=await self.coder.api('GET','/api/v2/workspaces/'+wid)
+        try:ws=await self.coder.api('GET','/api/v2/workspaces/'+wid)
+        except RuntimeError as error:
+            if getattr(error,'status_code',0) not in (404,410):raise
+            self.record.pop('workspace_id',None);self.save();self.state='asleep';return None
         if ws.get('deleted') or ws['template_id']!=self.coder.settings()['template_id']:
             self.record.pop('workspace_id',None);self.save();return None
         status=ws['latest_build']['status']
@@ -53,7 +56,12 @@ class ProjectReserve:
                 if running>=self.coder.max_running:self.state='capacity full';return
                 ws=await self.coder.api('POST',f"/api/v2/organizations/{settings['organization_id']}/members/me/workspaces",json={'name':'reserve-'+uuid.uuid4().hex[:12],'template_id':settings['template_id'],'ttl_ms':int(self.idle*1000)})
                 wid=ws['id'];self.record['workspace_id']=wid;self.save();self.coder.touched[wid]=time.time()
-            ws=await self.coder.api('GET','/api/v2/workspaces/'+wid)
+            try:ws=await self.coder.api('GET','/api/v2/workspaces/'+wid)
+            except RuntimeError as error:
+                if getattr(error,'status_code',0) not in (404,410):raise
+                self.record.pop('workspace_id',None);self.save();self.state='asleep';return
+            if ws['template_id']!=settings['template_id']:
+                self.record.pop('workspace_id',None);self.save();self.state='asleep';return
             state=ws['latest_build']['status']
             if ws.get('deleted'):
                 self.record.pop('workspace_id',None);self.save();self.state='asleep';return

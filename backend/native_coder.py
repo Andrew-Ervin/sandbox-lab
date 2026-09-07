@@ -1,6 +1,19 @@
 """Headless Coder agent loop in the control plane, execution in Coder workspaces."""
 import asyncio,json,time
+import httpx
+from .agent_telemetry import snapshot
 from .config import STATE,MODEL,REASONING
+from .limits import value
+
+async def collect_result(coder,ws,run,store):
+    """File retrieval can reconnect without executing the user's task again."""
+    for attempt in range(2):
+        try:return await coder.collect_artifacts(ws),None
+        except (TimeoutError,httpx.TransportError,RuntimeError):
+            if attempt==0:
+                run['summary']='Coding completed. Reconnecting to retrieve its files…';store.save_run(run)
+                await asyncio.sleep(1)
+    return [],'Coding completed, but its output files could not be retrieved yet. They remain in the project workspace; open Workspace files to access them.'
 
 def configuration():
     path=STATE/'native-coder.json'
@@ -39,7 +52,8 @@ async def messages_after(coder,path,after=0):
     return sorted(messages,key=lambda m:int(m['id']))
 
 async def run_native(coder,thread,prompt,mode,run,store,context,input_files=None):
-    config=configuration();prefix=config['api_prefix'];chat_id=None;ws=None
+    config=configuration();prefix=config['api_prefix'];chat_id=None;ws=None;dispatched=False
+    sessions=getattr(coder,'sessions',None)
     start=time.monotonic();run['status']='provisioning';store.save_run(run)
     try:
         ws=await coder.workspace(thread,store,context)
@@ -66,31 +80,66 @@ async def run_native(coder,thread,prompt,mode,run,store,context,input_files=None
             if chat['status'] not in ('waiting','error'):raise RuntimeError('Previous native Coder turn is still active')
             old=await coder.api('GET',prefix+'/'+chat_id+'/messages',params={'limit':1})
             before=max((int(m['id']) for m in old.get('messages',[])),default=0)
+            if sessions:sessions.begin(chat_id,ws['id'])
+            dispatched=True
             await coder.api('POST',prefix+'/'+chat_id+'/messages',json={'content':content,'model_config_id':config['model_config_id'],'reasoning_effort':REASONING,'mcp_server_ids':[]})
         else:
             chat=await coder.api('POST',prefix,json={'organization_id':coder.settings()['organization_id'],'content':content,'workspace_id':ws['id'],'model_config_id':config['model_config_id'],'reasoning_effort':REASONING,'mcp_server_ids':[]})
             chat_id=chat['id'];thread.metadata['native_coder_chat_id']=chat_id
             await store.save_thread(thread,context)
+            dispatched=True
+            if sessions:sessions.begin(chat_id,ws['id'])
         run['native_coder_chat_id']=chat_id;store.save_run(run)
-        async with asyncio.timeout(900):
+        trace_messages={};last_trace=0
+        deadline=asyncio.timeout(value('NATIVE_RUN_SECONDS'))
+        async with deadline:
             while True:
-                chat=await coder.api('GET',prefix+'/'+chat_id)
+                try:chat=await coder.api('GET',prefix+'/'+chat_id)
+                except (httpx.TransportError,RuntimeError) as error:
+                    if not isinstance(error,httpx.TransportError) and getattr(error,'status_code',0) not in (429,502,503,504):raise
+                    run['summary']='Reconnecting to Coder; the workspace run continues.';store.save_run(run)
+                    await asyncio.sleep(5);continue
+                if sessions:sessions.track(chat_id,ws['id'],chat['status'])
+                if time.monotonic()-last_trace>=value('NATIVE_TELEMETRY_SECONDS'):
+                    try:
+                        page=await coder.api('GET',prefix+'/'+chat_id+'/messages',params={'limit':100})
+                        trace_messages.update({int(m['id']):m for m in page.get('messages',[]) if int(m['id'])>before})
+                        trace_messages=dict(sorted(trace_messages.items())[-value('NATIVE_TELEMETRY_MAX_MESSAGES'):])
+                        run['telemetry']=snapshot(list(trace_messages.values()))
+                    except (httpx.TransportError,RuntimeError):pass
+                    last_trace=time.monotonic()
                 run['summary']='Coder Agent: '+chat['status'];store.save_run(run)
+                if chat['status'] in ('waiting','error') and sessions and chat_id in sessions.stops:
+                    return {'summary':'Coding stopped. Project files have been retained.','canceled':True,'exit_code':0,'artifacts':[]}
                 if chat['status']=='error':raise RuntimeError('Native Coder agent failed: '+str(chat.get('last_error') or 'unknown error')[:800])
                 if chat['status']=='requires_action':raise RuntimeError('Native Coder requires an action; this trial has no headless MCP approval bridge')
                 if chat['status']=='waiting':break
                 await asyncio.sleep(2)
-        messages=await messages_after(coder,prefix+'/'+chat_id+'/messages',before)
+        run['execution_finished']=True;store.save_run(run)
+        try:messages=await messages_after(coder,prefix+'/'+chat_id+'/messages',before)
+        except (httpx.TransportError,RuntimeError):messages=list(trace_messages.values())
+        run['telemetry']=snapshot(messages)
         summary,executions=results(messages)
-        result={'summary':summary or chat.get('last_turn_summary') or 'Coder Agent completed.','exit_code':0,'executions':executions,'artifacts':await coder.collect_artifacts(ws)}
         if mode=='app':run['preview_url']=f'/api/app-preview/{run["id"]}'
+        artifacts,warning=await collect_result(coder,ws,run,store)
+        result={'summary':summary or chat.get('last_turn_summary') or 'Coder Agent completed.','exit_code':0,'executions':executions,'artifacts':artifacts}
+        if warning:result['retrieval_notice']=warning
         run['summary']=result['summary'][:600];run['timings']['agent_seconds']=round(time.monotonic()-start-run['timings']['workspace_seconds'],4)
         thread.metadata['coding_engine']='coder-native';await store.save_thread(thread,context)
         return result
-    except BaseException:
-        if chat_id:
-            try:await coder.api('POST',prefix+'/'+chat_id+'/interrupt')
+    except BaseException as error:
+        if chat_id and dispatched and not run.get('execution_finished'):
+            try:
+                if sessions:await sessions.stop(thread.id,context['owner'],chat_id)
+                else:await coder.api('POST',prefix+'/'+chat_id+'/interrupt')
             except Exception:pass
+        if isinstance(error,TimeoutError) and 'deadline' in locals() and deadline.expired():
+            raise RuntimeError(f'Coding reached the configured {value("NATIVE_RUN_SECONDS")} second execution limit and was interrupted. Saved files remain in the project.') from None
         raise
     finally:
+        if chat_id and ws and sessions:
+            # Retain independent protection if the observer lost its connection.
+            # The status monitor confirms the actual terminal state later.
+            try:await sessions.read(chat_id,ws['id'],force=True)
+            except Exception:pass
         if ws:coder.active.discard(ws['id']);coder.touched[ws['id']]=time.time()

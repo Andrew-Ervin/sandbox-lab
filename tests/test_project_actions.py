@@ -5,6 +5,7 @@ from fastapi import FastAPI,Request
 from chatkit.store import NotFoundError
 from backend.store import SQLiteStore
 from backend.projects import install_projects
+from backend.workspace_links import install_workspace_links
 from backend.coder import CoderAPIError
 from test_projects import chat
 
@@ -45,6 +46,7 @@ async def fixture(tmp_path,monkeypatch):
     @app.middleware('http')
     async def identity(request:Request,next):request.state.owner=request.headers.get('test-owner','alice');return await next(request)
     state['deletions']=install_projects(app,s,coder,SimpleNamespace(get=live))
+    install_workspace_links(app,s,coder,SimpleNamespace())
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test') as c:yield c,s,p,state,tmp_path
 
 @pytest.mark.asyncio

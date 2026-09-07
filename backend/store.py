@@ -103,21 +103,21 @@ class SQLiteStore(ProjectStore, Store[dict]):
     def save_run(self, run):
         with self.db: self.db.execute('INSERT INTO runs VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body',(run['id'],run['thread_id'],json.dumps(run),datetime.now().timestamp()))
     def runs(self, owner, limit=60, *, details=True):
-        body="r.body" if details else "json_remove(r.body, '$.code', '$.task', '$.output', '$.executions')"
+        body="r.body" if details else "json_remove(r.body, '$.code', '$.task', '$.output', '$.executions', '$.telemetry')"
         return [json.loads(r[0]) for r in self.db.execute(f'SELECT {body} FROM runs r JOIN threads t ON r.thread=t.id WHERE t.owner=? ORDER BY r.created DESC LIMIT ?',(owner,limit)).fetchall()]
     def get_run(self, run_id, owner):
         row=self.db.execute('SELECT r.body FROM runs r JOIN threads t ON r.thread=t.id WHERE r.id=? AND t.owner=?',(run_id,owner)).fetchone()
         return json.loads(row[0]) if row else None
     def apps(self, owner):
         # Gallery lifetime is independent of the recent execution history window.
-        rows=self.db.execute("SELECT json_remove(r.body, '$.code', '$.task', '$.output', '$.executions'),t.body FROM runs r JOIN threads t ON r.thread=t.id WHERE t.owner=? AND json_extract(r.body,'$.preview_url') IS NOT NULL ORDER BY r.created DESC",(owner,)).fetchall()
+        rows=self.db.execute("SELECT json_remove(r.body, '$.code', '$.task', '$.output', '$.executions', '$.telemetry'),t.body FROM runs r JOIN threads t ON r.thread=t.id WHERE t.owner=? AND json_extract(r.body,'$.preview_url') IS NOT NULL ORDER BY r.created DESC",(owner,)).fetchall()
         result=[]; seen=set()
         for body,thread in rows:
             run=json.loads(body)
             key=run.get('workspace_id') or run.get('pod') or run['id']
             if run.get('gallery_hidden') or key in seen: continue
             seen.add(key)
-            result.append({**{k:v for k,v in run.items() if k not in ['code','task','output','executions']},'title':json.loads(thread).get('title')})
+            result.append({**{k:v for k,v in run.items() if k not in ['code','task','output','executions','telemetry']},'title':json.loads(thread).get('title')})
         return result
     def save_job(self, job):
         with self.db: self.db.execute('INSERT INTO jobs VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body',(job['id'],job['owner'],json.dumps(job),job['started']))

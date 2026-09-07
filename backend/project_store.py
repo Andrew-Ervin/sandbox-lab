@@ -9,6 +9,7 @@ class ProjectStore:
         CREATE TABLE IF NOT EXISTS project_threads(thread TEXT PRIMARY KEY, project TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner);
         CREATE INDEX IF NOT EXISTS idx_project_threads_project ON project_threads(project);
+        CREATE TABLE IF NOT EXISTS source_sync_state(project TEXT PRIMARY KEY, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS thread_preferences(thread TEXT PRIMARY KEY, archived INTEGER NOT NULL DEFAULT 0);
         ''')
         columns={r[1] for r in self.db.execute('PRAGMA table_info(projects)')}

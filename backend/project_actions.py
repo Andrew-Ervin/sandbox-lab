@@ -73,7 +73,7 @@ def install_project_actions(app,store,coder):
         async with lock:
             wid=p['workspace_id']
             if wid:
-                if wid in coder.active or wid in coder.provisioning:raise HTTPException(409,'The workspace is busy. Wait for it to finish.')
+                if wid in coder.active or wid in getattr(coder,'native_active',set()) or wid in coder.provisioning:raise HTTPException(409,'The workspace is busy. Wait for it to finish.')
                 try:
                     try:ws=await coder.api('GET','/api/v2/workspaces/'+wid)
                     except CoderAPIError as exc:
@@ -87,7 +87,7 @@ def install_project_actions(app,store,coder):
                             raise HTTPException(422,'Coder could not delete the workspace. Inspect its failed build, then retry deletion.')
                         tids={r[0] for r in store.db.execute('SELECT thread FROM project_threads WHERE project=?',(pid,))}
                         idle(tids,owner)
-                        if wid in coder.active or wid in coder.provisioning:raise HTTPException(409,'The workspace is busy. Wait for it to finish.')
+                        if wid in coder.active or wid in getattr(coder,'native_active',set()) or wid in coder.provisioning:raise HTTPException(409,'The workspace is busy. Wait for it to finish.')
                         if status!='deleting':
                             deletions.submitted(pid)
                             await coder.api('POST','/api/v2/workspaces/'+wid+'/builds',json={'transition':'delete'})
@@ -101,6 +101,7 @@ def install_project_actions(app,store,coder):
             await asyncio.to_thread(remove_paths,paths)
             with store.db:
                 purge_records(store,tids)
+                store.db.execute('DELETE FROM source_sync_state WHERE project=?',(pid,))
                 store.db.execute('DELETE FROM projects WHERE id=? AND owner=?',(pid,owner))
                 # Commit completion with the deletion so a crash cannot strand the operation.
                 deletions.update(pid,'Project deleted',status='deleted')

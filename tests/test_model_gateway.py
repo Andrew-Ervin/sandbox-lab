@@ -13,6 +13,14 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 
+@pytest.fixture(autouse=True)
+def enforced_test_policy(monkeypatch):
+    monkeypatch.setenv('OPENROUTER_REQUIRE_ZDR', 'true')
+    monkeypatch.setenv('OPENROUTER_PROVIDER_ORDER', 'amazon-bedrock,openai')
+    monkeypatch.setenv('OPENROUTER_PROVIDER_IGNORE', 'azure')
+    monkeypatch.setenv('OPENROUTER_DATA_COLLECTION', 'deny')
+
+
 @pytest.fixture
 def gateway(tmp_path, monkeypatch):
     monkeypatch.setenv('LAB_TOKEN_SECRET', 'test-signing-secret-for-unit-tests-only')
@@ -66,7 +74,7 @@ def test_client_cannot_weaken_privacy_or_enable_other_search(gateway):
     body = gateway.prepare_body({'messages': [{'role': 'user', 'content': 'hello'}],
         'provider': {'zdr': False, 'data_collection': 'allow'}, 'model': 'other', 'max_tokens': 999999,
         'plugins': [{'id': 'web'}], 'tools': [{'type': 'openrouter:web_search', 'parameters': {'engine': 'other'}}]})
-    assert body['provider'] == {'zdr': True, 'data_collection': 'deny'}
+    assert body['provider'] == {'zdr': True, 'data_collection': 'deny', 'order': ['amazon-bedrock', 'openai'], 'ignore': ['azure'], 'allow_fallbacks': True}
     assert body['model'] == 'test/model' and body['max_tokens'] == 16000
     assert 'plugins' not in body
     assert body['tools'][0]['parameters']['engine'] == 'exa'
@@ -99,7 +107,7 @@ def test_old_openai_reasoning_is_omitted_without_losing_tool_or_current_turn_his
     for i in (0, 2, 4, 5, 6):
         assert body['messages'][i] == original[i]
     assert messages == original  # no mutation of a saved Pi session
-    assert body['provider'] == {'zdr': True, 'data_collection': 'deny'}
+    assert body['provider'] == {'zdr': True, 'data_collection': 'deny', 'order': ['amazon-bedrock', 'openai'], 'ignore': ['azure'], 'allow_fallbacks': True}
 
 
 @pytest.mark.parametrize('provider', ['anthropic/test-model', 'test/model', 'openai/test-model'])
@@ -153,7 +161,7 @@ async def test_chat_and_titles_use_zdr(monkeypatch):
     chat.http = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
     try:
         await chat.completion([{'role': 'user', 'content': 'test'}], tools=False, max_tokens=40)
-        assert seen[0]['provider'] == {'zdr': True, 'data_collection': 'deny'}
+        assert seen[0]['provider'] == {'zdr': True, 'data_collection': 'deny', 'order': ['amazon-bedrock', 'openai'], 'ignore': ['azure'], 'allow_fallbacks': True}
     finally:
         await chat.close()
 
@@ -169,7 +177,7 @@ async def test_provider_privacy_rejection_is_clear_and_never_retried_without_pol
             r=await client.post('/v1/chat/completions',headers={'Authorization':'Bearer '+token(gateway)},json={'messages':[{'role':'user','content':'private-synthetic-input'}]})
             assert r.status_code==403
             assert 'privacy policy' in r.json()['error']['message']
-            assert len(seen)==1 and seen[0]['provider']=={'zdr':True,'data_collection':'deny'}
+            assert len(seen)==1 and seen[0]['provider']=={'zdr':True,'data_collection':'deny','order':['amazon-bedrock','openai'],'ignore':['azure'],'allow_fallbacks':True}
             assert 'private-provider-detail' not in r.text+caplog.text
             assert 'private-synthetic-input' not in r.text+caplog.text
 
@@ -190,7 +198,7 @@ def test_native_protocol_cannot_weaken_policy_or_enable_server_tools(gateway,pro
     body={field:[{'role':'user','content':'hello'}],'model':'other','provider':{'zdr':False},'store':True,'previous_response_id':'other'}
     result=gateway.prepare_native(body,protocol)
     assert result['model']==gateway.model
-    assert result['provider']=={'zdr':True,'data_collection':'deny'}
+    assert result['provider']=={'zdr':True,'data_collection':'deny','order':['amazon-bedrock','openai'],'ignore':['azure'],'allow_fallbacks':True}
     assert 'previous_response_id' not in result
     assert result.get('store',False) is False
     with pytest.raises(HTTPException):gateway.prepare_native({**body,'tools':[{'type':'web_search'}]},protocol)
@@ -231,3 +239,35 @@ async def test_dictation_transcript_and_credentials_stay_server_side(gateway):
             assert result.json()=={'text':'Hello world'}
             assert result.headers['cache-control']=='no-store'
             assert len(seen)==1 and seen[0].headers['Authorization']=='Bearer test-provider-key'
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,expected',[(400,'format'),(402,'credit'),(429,'rate limited'),(503,'temporarily unavailable')])
+async def test_dictation_error_is_actionable_without_echoing_provider_payload(gateway,monkeypatch,status,expected):
+    async def verified(client):pass
+    monkeypatch.setattr(gateway,'verify_transcription_privacy',verified)
+    async def provider(req):return httpx.Response(status,json={'error':{'message':'private provider content'}})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as upstream:
+        gateway.app.state.upstream=upstream
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway.app),base_url='http://test') as c:
+            r=await c.post('/v1/audio/transcriptions',headers={'Authorization':'Bearer '+token(gateway)},json={'format':'wav','data':base64.b64encode(b'RIFFsynthetic').decode()})
+            assert r.status_code==502 and expected in r.text
+            assert 'private provider content' not in r.text
+
+def test_five_minute_wav_fits_upload_bound(gateway):
+    assert 44+302*16000*2<=gateway.MAX_AUDIO_BYTES
+
+
+@pytest.mark.asyncio
+async def test_operator_can_temporarily_disable_zdr_without_client_routing_override(gateway, monkeypatch):
+    monkeypatch.setenv('OPENROUTER_REQUIRE_ZDR', 'false')
+    body = gateway.prepare_body({'messages':[{'role':'user','content':'test'}],
+                                 'provider':{'only':['azure'],'zdr':True}})
+    assert body['provider'] == {'zdr':False,'data_collection':'deny','order':['amazon-bedrock','openai'],'ignore':['azure'],'allow_fallbacks':True}
+    assert gateway.prepare_native({'input':'hello'}, 'responses')['provider'] == body['provider']
+    class NoRequests:
+        async def get(self, *args): raise AssertionError('Disabled ZDR should not query metadata')
+    await gateway.verify_transcription_privacy(NoRequests())
+    from sandbox.model_policy import provider_policy
+    assert provider_policy(speech=True) == {'zdr':False,'data_collection':'deny'}
+    monkeypatch.setenv('OPENROUTER_REQUIRE_ZDR', 'typo')
+    with pytest.raises(ValueError): provider_policy()

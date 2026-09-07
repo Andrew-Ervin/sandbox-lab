@@ -1,17 +1,18 @@
 """Local conversation file snapshots, independent of disposable compute lifetime."""
+from .limits import value
 import base64,hashlib,json,re
 from pathlib import PurePosixPath
 from .config import STATE
 
 def directory(thread_id):return STATE/'quick-checkpoints'/hashlib.sha256(thread_id.encode()).hexdigest()
 def validate(entries):
-    if not isinstance(entries,list) or len(entries)>40:raise ValueError('Invalid quick checkpoint')
+    if not isinstance(entries,list) or len(entries)>value('ARTIFACT_MAX_FILES'):raise ValueError('Invalid quick checkpoint')
     total=0;seen=set()
     for entry in entries:
         name=entry.get('name','');parts=PurePosixPath(name).parts
         if not parts or name.startswith('/') or len(parts)>8 or len(name)>400 or name in seen or any(not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_. -]{0,159}',p) or '..' in p for p in parts) or parts[0] in {'artifacts','plots','files','__pycache__','.venv','node_modules','.git'}:raise ValueError('Invalid checkpoint path')
         raw=base64.b64decode(entry.get('data',''),validate=True);total+=len(raw);seen.add(name)
-        if len(raw)>8_000_000 or total>16_000_000:raise ValueError('Quick checkpoint exceeds file limits')
+        if len(raw)>value('ARTIFACT_MAX_FILE_BYTES') or total>value('ARTIFACT_MAX_TOTAL_BYTES'):raise ValueError('Quick checkpoint exceeds file limits')
     return entries
 
 def save(thread_id,run_id,value):
@@ -23,5 +24,5 @@ def save(thread_id,run_id,value):
 def load(thread_id):
     path=directory(thread_id)/'latest.json'
     if not path.exists():return []
-    if path.is_symlink() or path.stat().st_size>23_000_000:raise ValueError('Invalid saved checkpoint')
+    if path.is_symlink() or path.stat().st_size>value('ARTIFACT_MAX_TOTAL_BYTES')*2+value('ARTIFACT_MAX_FILES')*1024:raise ValueError('Invalid saved checkpoint')
     return validate(json.loads(path.read_text()).get('files',[]))

@@ -13,8 +13,12 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
+try:
+    from sandbox.model_policy import provider_policy, require_zdr, web_search_tool
+except ModuleNotFoundError:
+    from model_policy import provider_policy, require_zdr, web_search_tool
 
-MAX_BODY = 2_000_000
+MAX_BODY = int(os.getenv('MODEL_MAX_BODY_BYTES','2000000'))
 AUDIENCE = 'sandbox-lab-model'
 secret = os.environ['LAB_TOKEN_SECRET'].encode()
 if len(secret) < 32:
@@ -122,12 +126,13 @@ def prepare_body(body):
         raise HTTPException(400, 'Invalid streaming option')
     result.update(model=model, max_tokens=16000,
                   reasoning={'effort': os.getenv('OPENROUTER_REASONING', 'xhigh')},
-                  provider={'zdr': True, 'data_collection': 'deny'})
+                  provider=provider_policy())
     # Search is an approved disclosure channel, not a DLP control. Admin can disable it.
     if allow_search:
-        tools.append({'type': 'openrouter:web_search', 'parameters': {
-            'engine': 'exa', 'max_results': 3, 'max_total_results': 6, 'max_uses': 2, 'search_context_size': 'low'}})
-        result['max_tool_calls'] = 2
+        search_tool=web_search_tool()
+        if search_tool:
+            tools.append(search_tool)
+            result['max_tool_calls'] = search_tool['parameters']['max_uses']
     if tools:
         result['tools'] = tools
     else:
@@ -167,7 +172,7 @@ def prepare_native(body, protocol):
             raise HTTPException(400, 'Only local tools are permitted')
     allowed = {field, 'instructions', 'system', 'tools', 'tool_choice', 'stream', 'parallel_tool_calls'}
     result = {k:v for k,v in body.items() if k in allowed}
-    result.update(model=model, provider={'zdr': True, 'data_collection': 'deny'})
+    result.update(model=model, provider=provider_policy())
     if protocol == 'responses':
         result.update(store=False, max_output_tokens=16000,
                       reasoning={'effort': os.getenv('OPENROUTER_REASONING', 'xhigh')})
@@ -240,7 +245,7 @@ async def health():
     return {'ok': True}
 
 STT_MODEL = 'microsoft/mai-transcribe-2'
-MAX_AUDIO_BYTES = 4_000_000
+MAX_AUDIO_BYTES = int(os.getenv('DICTATION_MAX_BYTES','10000000'))
 
 
 def prepare_transcription(body):
@@ -253,10 +258,12 @@ def prepare_transcription(body):
     except ValueError: raise HTTPException(400,'Invalid recording') from None
     if not raw or len(raw)>MAX_AUDIO_BYTES: raise HTTPException(400,'Empty or oversized recording')
     return {'model':STT_MODEL,'input_audio':{'data':encoded,'format':body['format']},
-            'response_format':'json','provider':{'zdr':True,'data_collection':'deny'}}
+            'response_format':'json','provider':provider_policy(speech=True)}
 
 
 async def verify_transcription_privacy(client):
+    if not require_zdr():
+        return
     # STT ignores provider selection. Refuse unless every advertised endpoint is ZDR.
     try:
         endpoints,zdr=await asyncio.gather(
@@ -278,7 +285,7 @@ async def transcription(request: Request):
     try:
         async with asyncio.timeout(20):
             async for chunk in request.stream():
-                if len(raw)+len(chunk)>5_400_000:raise HTTPException(413,'Recording is too large')
+                if len(raw)+len(chunk)>((MAX_AUDIO_BYTES+2)//3)*4+1024:raise HTTPException(413,'Recording is too large')
                 raw.extend(chunk)
         body=prepare_transcription(json.loads(raw))
     except (ValueError,UnicodeError,RecursionError):raise HTTPException(400,'Invalid recording request') from None
@@ -291,6 +298,12 @@ async def transcription(request: Request):
         response.raise_for_status()
         text=response.json().get('text')
         if not isinstance(text,str):raise ValueError('Missing transcript')
+    except httpx.TimeoutException:
+        raise HTTPException(504,'Transcription timed out. Please try again; audio was not saved locally.') from None
+    except httpx.HTTPStatusError as exc:
+        code=exc.response.status_code
+        message={400:'The speech provider rejected the recording format. Reload VS Code to update dictation.',401:'Transcription credentials need operator attention.',402:'Transcription account credit is unavailable.',403:'Transcription access was refused.',413:'The speech provider rejected the recording size.',429:'The speech provider is busy or rate limited. Please retry shortly.'}.get(code,'The speech provider is temporarily unavailable. Please try again.')
+        raise HTTPException(502,message+' Audio was not saved locally.') from None
     except (httpx.HTTPError,ValueError):
-        raise HTTPException(502,'Transcription failed. Try a shorter recording; audio was not saved locally.') from None
+        raise HTTPException(502,'Transcription returned an invalid response. Please try again; audio was not saved locally.') from None
     return JSONResponse({'text':text},headers={'Cache-Control':'no-store'})

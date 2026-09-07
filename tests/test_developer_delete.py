@@ -48,3 +48,18 @@ async def test_ready_configuration_is_reused():
     dev.configured_until['owned']=time.time()+100
     await dev.prepare({'id':'owned','name':'project'})
     dev.api.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_rejected_login_session_retries_once_not_recursively(tmp_path,monkeypatch):
+    import json,httpx
+    import backend.developer as module
+    (tmp_path/'coder-admin.json').write_text(json.dumps({'email':'test@example.invalid','password':'synthetic'}))
+    monkeypatch.setattr(module,'STATE',tmp_path)
+    calls=[]
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200,json={'session_token':'test'}) if request.url.path.endswith('/login') else httpx.Response(401)
+    real=httpx.AsyncClient
+    monkeypatch.setattr(module.httpx,'AsyncClient',lambda **kw:real(transport=httpx.MockTransport(handler),**kw))
+    with pytest.raises(httpx.HTTPStatusError):await DeveloperWorkspaces().api('GET','/api/v2/users/me')
+    assert len(calls)==4

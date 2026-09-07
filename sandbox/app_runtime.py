@@ -1,5 +1,5 @@
 """Run inside the owning workspace. Persist/replay one app launch recipe, never a model turn."""
-import fcntl,json,os,re,socket,subprocess,time,sys
+import fcntl,hashlib,json,os,re,socket,subprocess,time,sys,signal
 from pathlib import Path
 ROOT=Path('/home/sandbox/project').resolve()
 STATE=Path.home()/'.local/state/lab';STATE.mkdir(parents=True,exist_ok=True)
@@ -45,6 +45,25 @@ def discover():
         if (folder/'index.html').is_file():return {'cwd':str(folder.relative_to(ROOT)),'command':['python','-m','http.server','3000','--bind','0.0.0.0']}
     raise ValueError('No app launch recipe was found. Add .lab/app.json with cwd and command, then retry opening the app.')
 
+def restore_packages(cwd,argv,env):
+    # Source sync deliberately excludes node_modules. Recreate dependencies
+    # through the configured gateway when the lockfile changes or they vanish.
+    if Path(argv[0]).name!='npm' or not (cwd/'package.json').is_file():return
+    manifest=cwd/'package.json';lock=cwd/'package-lock.json'
+    def digest():
+        return hashlib.sha256(manifest.read_bytes()+(lock.read_bytes() if lock.is_file() else b'')).hexdigest()
+    marker=STATE/('npm-'+hashlib.sha256(str(cwd).encode()).hexdigest()+'.sha256')
+    if (cwd/'node_modules').is_dir() and marker.is_file() and marker.read_text()==digest():return
+    command=['npm','ci' if lock.is_file() else 'install','--no-audit','--no-fund']
+    with (STATE/'app.log').open('ab') as log:
+        child=subprocess.Popen(command,cwd=cwd,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+        try:code=child.wait(timeout=int(os.getenv('APP_PACKAGE_RESTORE_SECONDS','120')))
+        except subprocess.TimeoutExpired:
+            os.killpg(child.pid,signal.SIGKILL);child.wait()
+            raise RuntimeError('App dependencies are still unavailable. Package restore timed out; inspect the workspace app log and retry.') from None
+    if code:raise RuntimeError('App dependency restore failed. Check the workspace app log for package policy or lockfile errors.')
+    marker.write_text(digest())
+
 def main():
     with (STATE/'app.lock').open('w') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
@@ -53,6 +72,7 @@ def main():
         RECIPE.parent.mkdir(exist_ok=True);RECIPE.write_text(json.dumps(recipe,indent=2))
         env={k:v for k,v in os.environ.items() if k not in ['CODER_AGENT_TOKEN','CODER_SESSION_TOKEN','OPENROUTER_API_KEY','LAB_MODEL_TOKEN']}
         env.update(PORT='3000',HOST='0.0.0.0')
+        restore_packages(cwd,argv,env)
         with (STATE/'app.log').open('ab') as log:
             child=subprocess.Popen(argv,cwd=cwd,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
         for _ in range(240):
@@ -60,7 +80,6 @@ def main():
             if child.poll() is not None:raise RuntimeError('App start failed; inspect ~/.local/state/lab/app.log and retry. No chat message is required.')
             time.sleep(.5)
         # Do not orphan a failed startup process group.
-        import signal
         os.killpg(child.pid,signal.SIGTERM)
         raise RuntimeError('App did not listen on port 3000 within two minutes.')
 if __name__=='__main__':

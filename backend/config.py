@@ -3,6 +3,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / '.env')
+load_dotenv(ROOT / 'config/limits.env')
+load_dotenv(ROOT / 'config/models.env')
 STATE = ROOT / '.local'
 STATE.mkdir(exist_ok=True)
 MODEL = os.getenv('OPENROUTER_MODEL', 'openai/gpt-5.6-luna')

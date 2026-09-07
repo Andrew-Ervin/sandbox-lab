@@ -3,7 +3,7 @@ async function labTranscribeAudio(message,sidebar){
  if(sidebar.labDictationBusy){sidebar.postMessage({type:'dictationResult',id:message.id,error:'A transcription is already in progress.'});return;}
  sidebar.labDictationBusy=true;
  try{
-  if(typeof message.data!=='string'||message.data.length>5400000||!['webm','ogg','mp4','wav'].includes(message.format))throw Error('Invalid or oversized recording.');
+  if(typeof message.data!=='string'||message.data.length>Math.ceil(LAB_VOICE_BYTES/3)*4||message.format!=='wav')throw Error('Invalid or oversized recording.');
   const token=require('node:fs').readFileSync(require('node:path').join(require('node:os').homedir(),'.config/lab/token'),'utf8').trim();
   const response=await fetch('http://model-gateway.lab-control.svc.cluster.local:8080/v1/audio/transcriptions',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({data:message.data,format:message.format}),signal:AbortSignal.timeout(90000)});
   const result=await response.json();
