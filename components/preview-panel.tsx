@@ -81,7 +81,7 @@ export function PreviewPanel({
                 variant={preview.ide ? 'secondary' : 'ghost'}
                 onClick={() =>
                   openPreview(
-                    preview.workspace!.name,
+                    preview.workspace!.project_name || preview.workspace!.name,
                     `/api/developer/workspaces/${preview.workspace!.id}/open`,
                     preview.workspace,
                     true,
@@ -95,7 +95,7 @@ export function PreviewPanel({
                 variant={preview.ide ? 'ghost' : 'secondary'}
                 onClick={() =>
                   openPreview(
-                    preview.workspace!.name,
+                    preview.workspace!.project_name || preview.workspace!.name,
                     `/api/developer/workspaces/${preview.workspace!.id}/preview`,
                     preview.workspace,
                   )
