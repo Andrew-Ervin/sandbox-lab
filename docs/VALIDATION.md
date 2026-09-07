@@ -114,3 +114,8 @@ Full local logs and session identifiers stay under ignored .local or private doc
 Remaining production limits: single-owner local sessions, process-local coordination and SQLite; no complete clean-machine Linux/WSL2 qualification; no production Entra/OPA/MCP approval deployment. See the Azure plan for shared leases, durable jobs, governed storage, audit retention and per-turn process termination.
 
 The final Rust-app reopen initially reproduced `vite: not found` after source-only sync. Automatic lockfile-based npm restore fixed it, and the live Matrix Lab UI loaded inside the app preview. A focused restore regression test passed; the final suite includes 212 Python tests.
+
+## Copilot review follow-up — 2026-09-07
+
+- Artifact input reads now use descriptor-relative, no-follow directory/file opens, regular-file checks and bounded reads. Twelve new regression cases cover file and directory symlink swaps, replacement after opening, growth after `fstat`, stale catalog sizes, total/file-count bounds, missing files, FIFOs and path traversal. The Python suite passes all 224 tests; existing widget deprecation warnings remain.
+- Retained the intentional ChatKit CDN preconnect: the page loads its runtime from the same host on startup. Security documentation and the standalone field guide now explicitly distinguish browser CDN exposure from execution-pod egress restrictions.
