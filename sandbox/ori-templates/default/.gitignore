@@ -1,0 +1,13 @@
+node_modules/
+bun.lock
+.cache/
+coverage/
+
+.agents
+.claude
+.env
+.env.*
+!.env.example
+.agents/skills/
+.claude/skills/
+.ori/

@@ -1,0 +1,5 @@
+{
+  "minimum_age_days": 5,
+  "overrides": [],
+  "package_access": "all-valid-registry-packages"
+}

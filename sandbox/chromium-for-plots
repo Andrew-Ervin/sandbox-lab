@@ -1,0 +1,4 @@
+#!/bin/sh
+# The surrounding no-network, single-use pod is the isolation boundary.
+# Limit Chrome's processes so rendering fits the pod's existing 128-PID budget.
+exec /usr/bin/chromium --single-process --no-zygote --renderer-process-limit=1 --disable-background-networking --disable-software-rasterizer "$@"

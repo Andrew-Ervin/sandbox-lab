@@ -1,0 +1,68 @@
+# DRAFT: requires future quick-worker Deployment, Service Bus, KEDA federation,
+# a durable active-work metric and worker drain protocol. Do not apply locally.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: sandbox-servicebus
+  namespace: lab-control
+spec:
+  podIdentity:
+    provider: azure-workload
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: quick-workers
+  namespace: lab-control
+spec:
+  scaleTargetRef:
+    name: quick-worker
+  pollingInterval: 10
+  cooldownPeriod: 300
+  minReplicaCount: 0
+  maxReplicaCount: 64 # Illustrative; four execution slots per future worker.
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - {type: Percent, value: 100, periodSeconds: 15}
+            - {type: Pods, value: 8, periodSeconds: 15}
+          selectPolicy: Max
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - {type: Percent, value: 25, periodSeconds: 60}
+  triggers:
+    - type: azure-servicebus
+      metadata:
+        namespace: REPLACE_SERVICE_BUS_NAMESPACE
+        queueName: quick-jobs
+        messageCount: "4"
+        activationMessageCount: "0"
+      authenticationRef:
+        name: sandbox-servicebus
+    - type: prometheus
+      metadata:
+        serverAddress: http://REPLACE_PROMETHEUS_ENDPOINT
+        # Export from always-on control: desired workers from queued + active
+        # renewable leases / slots. Positive while any work is owned.
+        query: sum(lab_quick_required_workers)
+        threshold: "1"
+        activationThreshold: "0"
+        ignoreNullValues: "false"
+    - type: cron
+      metadata:
+        timezone: America/New_York
+        start: "30 5 * * 1-5"
+        end: "0 19 * * 1-5"
+        desiredReplicas: "2"
+    - type: cron
+      metadata:
+        timezone: America/New_York
+        start: "30 7 * * 2-4"
+        end: "0 18 * * 2-4"
+        desiredReplicas: "4"
+# Separate queue/scaler for long project turns. Trusted workers belong on the
+# services pool; untrusted execution pods belong on tainted execution user pools.

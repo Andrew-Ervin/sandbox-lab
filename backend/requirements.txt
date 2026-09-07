@@ -1,0 +1,7 @@
+openai-chatkit==1.6.5
+fastapi
+uvicorn[standard]
+httpx
+kubernetes
+python-dotenv
+PyYAML
