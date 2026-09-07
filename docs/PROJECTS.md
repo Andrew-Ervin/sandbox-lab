@@ -26,7 +26,7 @@ Deleting a project removes its chats and headless home; an independently linked 
 
 The main assistant uses everyday language unless implementation detail is requested. It can retrieve selected sections from curated operator documentation plus an explicit list of non-secret runtime settings. It cannot use that reader to inspect `.env`, private operator state, or arbitrary files.
 
-Approval requests use a formatted summary, native ChatKit confirm/cancel controls, and a full JSON viewer. The full payload is the source of truth; opening it cannot approve the action. Completed approval cards collapse. Actual authorization and mandatory approval enforcement belong to the tool service; the generic renderer does not enforce OPA or supply enterprise identity.
+Approval requests use a formatted summary, native ChatKit confirm/cancel controls, and a request viewer with Preview and JSON tabs. Email previews retain text structure and embedded raster images, including Microsoft Graph-style inline attachments. External images, active content, links and custom HTML styles are disabled; this is a safe content preview rather than an exact reproduction of every email client. The complete payload is bounded to 1 MB. The full payload is the source of truth; opening it cannot approve the action. Completed approval cards collapse. Actual authorization and mandatory approval enforcement belong to the tool service; the generic renderer does not enforce OPA or supply enterprise identity.
 
 Saved chat presentation can be rebuilt without model calls:
 

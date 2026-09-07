@@ -121,7 +121,7 @@ if name=='claude':
 else:
     for i,arg in enumerate(args):
         if arg.startswith('model_providers.openrouter.base_url='):
-            args[i]='model_providers.openrouter.base_url="'+gateway+'/v1"' 
+            args[i]='model_providers.openrouter.base_url="'+gateway+'/v1"'
 real=Path.home()/'.local/share/lab-harnesses/node_modules/.bin'/name
 os.execv(str(real),[str(real),*args])
 '''

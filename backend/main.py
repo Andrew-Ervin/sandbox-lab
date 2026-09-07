@@ -150,8 +150,9 @@ async def approval_payload(thread_id:str,item_id:str,request:Request):
     except NotFoundError:raise HTTPException(404,'Request not found')
     if item.type!='widget' or not item.copy_text:raise HTTPException(404,'No request payload available')
     raw=item.copy_text.encode()
-    if len(raw)>100_000:raise HTTPException(413,'Request is too large to preview')
-    return {'url':await previews.document(item_id,'Full request.json',raw)}
+    from .approval_view import MAX_PAYLOAD
+    if len(raw)>MAX_PAYLOAD:raise HTTPException(413,'Request is too large to preview')
+    return {'url':await previews.document(item_id,'Request details',raw)}
 
 @app.get('/api/package-policy')
 async def read_package_policy():return package_policy.read()

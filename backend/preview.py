@@ -1,5 +1,5 @@
 """A separate preview origin. Never forwards cookies or control-plane credentials."""
-import asyncio,httpx,mimetypes,secrets,time
+import asyncio,base64,hashlib,httpx,mimetypes,secrets,time
 from fastapi import FastAPI,Request,HTTPException
 from fastapi.responses import Response
 from .image_view import render as render_image
@@ -8,6 +8,8 @@ app=FastAPI(docs_url=None,redoc_url=None,openapi_url=None)
 targets={}
 ARTIFACT_CSP="sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' blob:; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'"
 from .preview_bridge import BRIDGE as ACTIVITY
+_BRIDGE_HASH=base64.b64encode(hashlib.sha256(ACTIVITY.removeprefix(b'<script>').removesuffix(b'</script>')).digest()).decode()
+DOCUMENT_CSP="sandbox allow-scripts; default-src 'none'; script-src 'sha256-"+_BRIDGE_HASH+"'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'"
 APP_CSP="sandbox allow-scripts allow-forms; default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-src 'none'; object-src 'none'"
 @app.api_route('/{path:path}',methods=['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS'])
 async def preview(path:str,request:Request):
@@ -22,7 +24,11 @@ async def preview(path:str,request:Request):
         common['Content-Security-Policy']=ARTIFACT_CSP
         content=target['content'] if target['kind']=='document' else target['path'].read_bytes();media=target['media_type']
         name=target['name'] if target['kind']=='document' else target['path'].name
-        if media.startswith('image/'):
+        if target['kind']=='document':
+            from .approval_view import render
+            common['Content-Security-Policy']=DOCUMENT_CSP
+            content=render(content,name);media='text/html'
+        elif media.startswith('image/'):
             content=render_image(content,name,media);media='text/html'
         elif media!='text/html':
             from .file_view import render

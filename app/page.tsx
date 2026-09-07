@@ -553,23 +553,30 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
           typeof action.payload?.item_id === 'string'
         ) {
           await openPreview(
-            'Full request.json',
+            'Request details',
             `/api/approval-payload/${encodeURIComponent(action.payload.thread_id)}/${encodeURIComponent(action.payload.item_id)}`,
           );
           return;
         }
         if (action.type === 'approval_decide') {
-          const r = await sessionFetch('/api/approvals/decision', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(action.payload),
-          });
-          if (!r.ok) {
-            setError('Approval is expired, already handled, or unavailable.');
-            return;
+          try {
+            const r = await sessionFetch('/api/approvals/decision', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(action.payload),
+            });
+            if (!r.ok) {
+              setError('This request is expired, already handled, or unavailable. No new approval was recorded.');
+            } else {
+              setError('');
+              void refresh();
+            }
+            // The active response already delivers the authoritative card update.
+            // Starting a second fetch while it streams can race that update.
+            if (!streaming.current) await chat.fetchUpdates();
+          } catch {
+            setError('The approval service could not be reached. Your decision was not confirmed; check the card before retrying.');
           }
-          void refresh();
-          void chat.fetchUpdates().catch((e: Error) => setError(e.message));
           return;
         }
         if (
