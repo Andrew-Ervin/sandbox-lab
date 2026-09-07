@@ -1,14 +1,14 @@
 'use client';
 import type { CSSProperties, RefObject } from 'react';
 import {
-  AppWindow,
-  Monitor,
   RefreshCw,
   ExternalLink,
   X,
   LoaderCircle,
+  MoreHorizontal,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuCheckboxItem, DropdownMenuRadioGroup, DropdownMenuRadioItem } from '@/components/ui/dropdown-menu';
 import { ResizeHandle } from '@/components/panel-resize';
 import type { Preview, Workspace } from '@/lib/lab-types';
 
@@ -71,7 +71,6 @@ export function PreviewPanel({
       )}
       <div className="preview-toolbar">
         <div>
-          {preview.ide ? <Monitor size={17} /> : <AppWindow size={17} />}
           <strong>{preview.title}</strong>
         </div>
         <div>
@@ -106,65 +105,23 @@ export function PreviewPanel({
               </Button>
             </div>
           )}
-          <label className="preview-width-control" title="Preview width">
-            <span className="sr-only">Preview width</span>
-            <select
-              aria-label="Preview width"
-              value={previewFull ? 'full' : String(previewWidth)}
-              onChange={(e) => {
-                setPreviewFull(e.target.value === 'full');
-                if (e.target.value !== 'full')
-                  setPreviewWidth(Number(e.target.value));
-              }}
-            >
-              {![40, 55, 70].includes(previewWidth) && (
-                <option value={previewWidth}>
-                  {Math.round(previewWidth)}%
-                </option>
-              )}
-              <option value="40">40%</option>
-              <option value="55">55%</option>
-              <option value="70">70%</option>
-              <option value="full">Full</option>
-            </select>
-          </label>
-          {!preview.ide &&
-            !/\.(png|jpe?g|webp|gif|svg)$/i.test(preview.title) && (
-              <Button
-                variant={fitPreview ? 'secondary' : 'ghost'}
-                size="sm"
-                aria-pressed={fitPreview}
-                title="Fit content to preview width"
-                onClick={() => setFitPreview(!fitPreview)}
-              >
-                {fitPreview ? 'Fit width' : 'Actual size'}
-              </Button>
-            )}
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Reload preview"
-            onClick={() =>
-              openPreview(
-                preview.title,
-                preview.endpoint,
-                preview.workspace,
-                preview.ide,
-              )
-            }
-          >
-            <RefreshCw size={16} />
-          </Button>
-          {preview.url && (
-            <a
-              href={preview.url}
-              target="_blank"
-              rel="noreferrer"
-              aria-label="Open preview in new tab"
-            >
-              <ExternalLink size={16} />
-            </a>
-          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger className="preview-menu-trigger" aria-label="Preview options" title="Preview options"><MoreHorizontal size={18} /></DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-48">
+              <DropdownMenuRadioGroup value={previewFull ? 'full' : String(previewWidth)} onValueChange={(value) => {
+                setPreviewFull(value === 'full'); if (value !== 'full') setPreviewWidth(Number(value));
+              }}>
+                <DropdownMenuRadioItem value="40">Narrow · 40%</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="55">Balanced · 55%</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="70">Wide · 70%</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="full">Full width</DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+              {!preview.ide && <DropdownMenuCheckboxItem checked={fitPreview} onCheckedChange={setFitPreview}>Fit content to width</DropdownMenuCheckboxItem>}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => void openPreview(preview.title, preview.endpoint, preview.workspace, preview.ide)}><RefreshCw size={15} />Reload preview</DropdownMenuItem>
+              {preview.url && <DropdownMenuItem render={<a href={preview.url} target="_blank" rel="noreferrer" />}><ExternalLink size={15} />Open in new tab</DropdownMenuItem>}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             variant="ghost"
             size="icon"
@@ -207,13 +164,7 @@ export function PreviewPanel({
           <LoaderCircle className="spin" /> Opening preview…
         </div>
       )}
-      <div className="preview-caption">
-        {preview.ide
-          ? 'Your developer workspace · terminal and files inside VS Code'
-          : preview.workspace
-            ? 'Workspace app on port 3000 · isolated preview'
-            : 'Isolated preview · application credentials are not forwarded'}
-      </div>
+
     </aside>
   );
 }

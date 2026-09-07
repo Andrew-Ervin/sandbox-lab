@@ -5,7 +5,7 @@ from .config import STATE, ROOT
 from .activity import Activity
 
 class DeveloperWorkspaces:
-    def __init__(self): self.lock=asyncio.Lock(); self.token=None; self.tasks={}; self.harness={}; self.touched=Activity('developer'); self.configured_until={}
+    def __init__(self): self.lock=asyncio.Lock(); self.token=None; self.tasks={}; self.harness={}; self.touched=Activity('developer'); self.configured_until={}; self.setup_errors={}
     async def api(self,method,path,**kwargs):
         async with httpx.AsyncClient(base_url='http://127.0.0.1:7080',trust_env=False,timeout=30) as c:
             if not self.token:
@@ -76,19 +76,24 @@ class DeveloperWorkspaces:
     async def prepare(self,workspace):
         self.touched[workspace['id']]=time.time()
         task=self.tasks.get(workspace['id'])
-        if task and not task.done():await task
-        if self.configured_until.get(workspace['id'],0)<time.time():
+        if not task or task.done():
+            if self.configured_until.get(workspace['id'],0)>=time.time():return
             self.configure(workspace['id'],workspace['name'])
-            await self.tasks[workspace['id']]
-            if self.configured_until.get(workspace['id'],0)<time.time(): raise RuntimeError('Pi / Ori setup needs retry.')
+            task=self.tasks[workspace['id']]
+        await task
+        if self.configured_until.get(workspace['id'],0)<time.time():
+            raise RuntimeError(self.setup_errors.get(workspace['id'],'Pi / Ori setup needs retry.'))
 
     def configure(self,workspace_id,name):
         if workspace_id in self.tasks and not self.tasks[workspace_id].done(): return
         self.harness[workspace_id]='Preparing Ori / Pi'
+        self.setup_errors.pop(workspace_id,None)
         async def run():
             try:
                 for _ in range(90):
                     ws=await self.api('GET','/api/v2/workspaces/'+workspace_id)
+                    if ws['latest_build']['status'] in ('failed','canceled','stopped','deleted'):
+                        raise RuntimeError('Workspace startup failed. Check its Coder build and available storage/compute quota, then retry.')
                     agents=[a for r in ws['latest_build'].get('resources',[]) for a in r.get('agents',[])]
                     if any(a['status']=='connected' for a in agents): break
                     await asyncio.sleep(2)
@@ -101,7 +106,9 @@ class DeveloperWorkspaces:
                     if proc.returncode is None: proc.kill(); await proc.wait()
                 self.harness[workspace_id]='Pi through Ori · default agent'
                 self.configured_until[workspace_id]=time.time()+3300
-            except Exception: self.harness[workspace_id]='Setup needs retry — use Refresh Ori / Pi'
+            except Exception as exc:
+                self.harness[workspace_id]='Setup needs retry — use Refresh Ori / Pi'
+                self.setup_errors[workspace_id]=str(exc) if isinstance(exc,RuntimeError) else 'Workspace setup could not finish; retry opening it.'
         self.tasks[workspace_id]=asyncio.create_task(run())
 
 developer=DeveloperWorkspaces()

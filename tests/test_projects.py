@@ -68,6 +68,15 @@ def test_browser_preserves_nested_source_and_rejects_symlinks_credentials(tmp_pa
     (root/'src').rename(root/'old-src');(root/'src').symlink_to(tmp_path,target_is_directory=True)
     with pytest.raises(OSError):reader.execute({'action':'read','path':'src/outside'},str(root))
 
+def test_export_of_opened_developer_copy_is_relative_and_excludes_nested_imports(tmp_path,reader):
+    folder=tmp_path/'.lab/imports/transfer_abc';folder.mkdir(parents=True)
+    (folder/'main.py').write_text('developer edits')
+    (tmp_path/'unrelated.py').write_text('unrelated root file')
+    nested=folder/'.lab/imports/old';nested.mkdir(parents=True);(nested/'other.py').write_text('old import')
+    result=reader.execute({'action':'export','path':'.lab/imports/transfer_abc'},str(tmp_path))
+    assert [f['path'] for f in result['files']]==['main.py']
+    assert base64.b64decode(result['files'][0]['data'])==b'developer edits'
+
 def test_mock_sync_is_local_bounded_and_retains_previous_on_invalid_export(tmp_path):
     pid='prj_'+'a'*32
     data=lambda path,text:{'path':path,'data':base64.b64encode(text.encode()).decode()}

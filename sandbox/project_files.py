@@ -79,6 +79,7 @@ def execute(request,root_path=ROOT):
             raw=read_file(root,path)
             return {'path':path,'data':base64.b64encode(raw).decode(),'size':len(raw)}
         if action=='export':
+            base=path
             files=[];skipped=0;size=0;visited=0
             def walk(path):
                 nonlocal skipped,size,visited
@@ -88,17 +89,18 @@ def execute(request,root_path=ROOT):
                     for name in names:
                         if not visible(name) or name in GENERATED:skipped+=1;continue
                         entry=path+'/'+name if path else name
-                        if entry=='.lab/imports':skipped+=1;continue
+                        relative=entry[len(base)+1:] if base else entry
+                        if relative=='.lab/imports':skipped+=1;continue
                         st=os.stat(name,dir_fd=fd,follow_symlinks=False)
                         if stat.S_ISDIR(st.st_mode):walk(entry)
                         elif stat.S_ISREG(st.st_mode):
                             if st.st_size>MAX_FILE:skipped+=1;continue
                             raw=read_file(root,entry)
                             if len(files)>=MAX_FILES or size+len(raw)>MAX_TOTAL:raise ValueError('Mock sync exceeds 2,000 files or 32 MB; previous copy was retained')
-                            size+=len(raw);files.append({'path':entry,'data':base64.b64encode(raw).decode()})
+                            size+=len(raw);files.append({'path':relative,'data':base64.b64encode(raw).decode()})
                         else:skipped+=1
                 finally:os.close(fd)
-            walk('')
+            walk(base)
             return {'files':files,'excluded':skipped,'bytes':size}
         raise ValueError('Unknown project operation')
     finally:os.close(root)

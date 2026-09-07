@@ -30,3 +30,21 @@ async def test_delete_in_progress_is_idempotent():
     dev.list=AsyncMock(return_value=[{'id':'owned','status':'deleting'}])
     await dev.delete('owned')
     dev.api.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_failed_build_stops_setup_wait_and_prepare_does_not_retry_twice():
+    dev=DeveloperWorkspaces()
+    dev.api=AsyncMock(return_value={'latest_build':{'status':'failed','resources':[]}})
+    dev.configure('owned','project')
+    with pytest.raises(RuntimeError,match='storage/compute quota'):
+        await dev.prepare({'id':'owned','name':'project'})
+    dev.api.assert_awaited_once()
+    assert 'startup failed' in dev.setup_errors['owned']
+
+@pytest.mark.asyncio
+async def test_ready_configuration_is_reused():
+    import time
+    dev=DeveloperWorkspaces();dev.api=AsyncMock()
+    dev.configured_until['owned']=time.time()+100
+    await dev.prepare({'id':'owned','name':'project'})
+    dev.api.assert_not_awaited()

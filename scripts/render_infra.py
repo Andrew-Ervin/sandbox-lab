@@ -19,6 +19,8 @@ for ns in ['lab-sandboxes','lab-agents','lab-dev','lab-control','coder','coder-a
 for ns,quota in [('lab-sandboxes',{'pods':'10','requests.cpu':'4','limits.cpu':'10','requests.memory':'4Gi','limits.memory':'10Gi','requests.storage':'10Gi','persistentvolumeclaims':'4'}),('lab-agents',{'pods':'4','requests.cpu':'3','limits.cpu':'8','requests.memory':'3Gi','limits.memory':'16Gi','requests.storage':'10Gi'}),('lab-dev',{'pods':'3','requests.cpu':'2','limits.cpu':'6','requests.memory':'3Gi','limits.memory':'12Gi','requests.storage':'10Gi'})]:
     if ns=='lab-agents':
         quota.update({'pods':os.getenv('PROJECT_MAX_RUNNING','4'),'requests.storage':os.getenv('AI_STORAGE_QUOTA','100Gi'),'persistentvolumeclaims':os.getenv('AI_MAX_RETAINED_WORKSPACES','50')})
+    if ns=='lab-dev':
+        quota.update({'requests.storage':os.getenv('DEVELOPER_STORAGE_QUOTA','40Gi'),'persistentvolumeclaims':os.getenv('DEVELOPER_MAX_RETAINED_WORKSPACES','20')})
     add('ResourceQuota','capacity',ns,spec={'hard':quota})
     add('ServiceAccount','unprivileged',ns,automountServiceAccountToken=False)
     add('NetworkPolicy','default-deny',ns,spec={'podSelector':{},'policyTypes':['Ingress','Egress']})

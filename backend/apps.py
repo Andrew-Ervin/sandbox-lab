@@ -1,12 +1,22 @@
 """Click-driven workspace and app resume, independent of ChatKit/model execution."""
-import asyncio,os,shlex,time
+import asyncio,os,re,shlex,time
+from urllib.parse import urlencode
 from .config import ROOT,STATE,CODER_URL
+
+def developer_source_url(url,source_path):
+    if not source_path:return url
+    if not isinstance(source_path,str) or not re.fullmatch(r'\.lab/imports/transfer_[a-f0-9]{32}',source_path):
+        raise ValueError('Invalid developer source folder')
+    return url+'?'+urlencode({'folder':'/home/sandbox/project/'+source_path})
 class AppLifecycle:
     def __init__(self):self.locks={}
-    async def launch(self,workspace,token,url):
+    async def launch(self,workspace,token,url,source_path=None):
         env=dict(os.environ,CODER_URL=url,CODER_SESSION_TOKEN=token,CODER_CONFIG_DIR=str(STATE/'coder-service-cli'),CODER_USE_KEYRING='false')
+        developer_source_url('',source_path)
         script=(ROOT/'sandbox/app_runtime.py').read_text()
-        process=await asyncio.create_subprocess_exec(str(ROOT/'.local/bin/coder'),'ssh','--disable-autostart',workspace['name'],'--','python -I -c '+shlex.quote(script),env=env,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
+        command='python -I -c '+shlex.quote(script)
+        if source_path:command+=' '+shlex.quote(source_path)
+        process=await asyncio.create_subprocess_exec(str(ROOT/'.local/bin/coder'),'ssh','--disable-autostart',workspace['name'],'--',command,env=env,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
         try:
             out,_=await asyncio.wait_for(process.communicate(),140)
             if process.returncode:
@@ -26,7 +36,7 @@ class AppLifecycle:
                 await self.launch(ws,coder.settings()['token'],CODER_URL)
                 return await previews.app(ws,coder.settings())
             finally:coder.provisioning.discard(ws['id']);coder.touched[ws['id']]=time.time()
-    async def human(self,workspace_id,developer,previews,ide=False):
+    async def human(self,workspace_id,developer,previews,ide=False,source_path=None):
         async with self.locks.setdefault(workspace_id,asyncio.Lock()):
             ws=next((w for w in await developer.list() if w['id']==workspace_id),None)
             if not ws:raise ValueError('Workspace not found')
@@ -42,6 +52,6 @@ class AppLifecycle:
             # prepare waits for Coder connectivity and configures model access.
             await developer.prepare(ws)
             if ide:return ws['ide_url']
-            await self.launch(ws,developer.token,'http://127.0.0.1:7080')
+            await self.launch(ws,developer.token,'http://127.0.0.1:7080',source_path)
             return await previews.app(ws,{'token':developer.token},coder_url='http://127.0.0.1:7080')
 apps=AppLifecycle()

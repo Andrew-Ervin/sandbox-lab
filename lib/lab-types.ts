@@ -18,6 +18,7 @@ export type Run = {
   artifacts?: { name: string; url: string }[];
 };
 export type Workspace = {
+  source_path?: string;
   project_id?: string | null;
   project_name?: string | null;
   observed_at?: number;

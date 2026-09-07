@@ -1,9 +1,17 @@
 """Run inside the owning workspace. Persist/replay one app launch recipe, never a model turn."""
-import fcntl,json,os,socket,subprocess,time,sys
+import fcntl,json,os,re,socket,subprocess,time,sys
 from pathlib import Path
 ROOT=Path('/home/sandbox/project').resolve()
 STATE=Path.home()/'.local/state/lab';STATE.mkdir(parents=True,exist_ok=True)
 RECIPE=ROOT/'.lab/app.json'
+
+def select_source(path):
+    global ROOT,RECIPE
+    if not re.fullmatch(r'\.lab/imports/transfer_[a-f0-9]{32}',path):raise ValueError('Invalid source copy')
+    folder=(ROOT/path).resolve()
+    if not folder.is_relative_to(ROOT) or not folder.is_dir():raise ValueError('Source copy is not available')
+    ROOT=folder;RECIPE=ROOT/'.lab/app.json'
+
 
 def listening():
     try:
@@ -56,5 +64,7 @@ def main():
         os.killpg(child.pid,signal.SIGTERM)
         raise RuntimeError('App did not listen on port 3000 within two minutes.')
 if __name__=='__main__':
-    try:print(json.dumps(main()))
+    try:
+        if len(sys.argv)>1:select_source(sys.argv[1])
+        print(json.dumps(main()))
     except Exception as exc:print(json.dumps({'error':str(exc)}));sys.exit(1)

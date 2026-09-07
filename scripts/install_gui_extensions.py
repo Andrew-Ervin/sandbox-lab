@@ -24,9 +24,11 @@ def install(pod):
             if len(data)>250_000_000 or hashlib.sha256(data).hexdigest()!=sha:raise RuntimeError('Extension size/integrity check failed')
             path.write_bytes(data)
         target='/tmp/'+path.name
-        subprocess.run(base+['cp',str(path),'lab-dev/'+pod+':'+target],check=True)
-        subprocess.run(command+['code-server','--install-extension',target,'--force'],check=True,stdout=subprocess.DEVNULL)
-        subprocess.run(command+['rm',target],check=True)
+        try:
+            subprocess.run(base+['cp',str(path),'lab-dev/'+pod+':'+target],check=True)
+            subprocess.run(command+['code-server','--install-extension',target,'--force'],check=True,stdout=subprocess.DEVNULL)
+        finally:
+            subprocess.run(command+['rm','-f',target],check=False,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     print('Native Claude Code and Codex extensions ready.')
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--pod',required=True);install(parser.parse_args().pod)

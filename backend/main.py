@@ -235,7 +235,13 @@ async def start_app(run_id: str, request: Request):
 @app.post('/api/developer/workspaces/{workspace_id}/resume')
 async def resume_developer(workspace_id: str, request: Request):
     data=await request.json()
-    try:url=await apps.human(workspace_id,developer,previews,ide=data.get('ide',True))
+    try:
+        from .apps import developer_source_url
+        project=store.developer_project(workspace_id,request.state.owner)
+        source_path=data.get('source_path') or ((project or {}).get('workspace_sync') or {}).get('developer_source_path')
+        developer_source_url('',source_path)  # Validate before waking any compute.
+        url=await apps.human(workspace_id,developer,previews,ide=data.get('ide',True),source_path=source_path)
+        if data.get('ide',True):url=developer_source_url(url,source_path)
     except ValueError as exc:raise HTTPException(404,str(exc))
     except RuntimeError as exc:raise HTTPException(503,str(exc))
     response=JSONResponse({'url':url})
@@ -294,7 +300,7 @@ async def developer_delete(workspace_id: str,request:Request):
         if lock.locked():raise HTTPException(409,'Wait for this project’s sync operation to finish')
         async with lock:
             result=await developer.delete(workspace_id)
-            with store.db:store.db.execute('UPDATE projects SET developer_workspace_id=NULL,developer_name=NULL WHERE developer_workspace_id=? AND owner=?',(workspace_id,request.state.owner))
+            with store.db:store.db.execute('UPDATE projects SET developer_workspace_id=NULL,developer_name=NULL,workspace_sync=NULL WHERE developer_workspace_id=? AND owner=?',(workspace_id,request.state.owner))
             return result
     except HTTPException:raise
     except LookupError: raise HTTPException(404,'Workspace not found')

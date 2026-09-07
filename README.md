@@ -29,7 +29,7 @@ Open `http://127.0.0.1:3000`. The launcher also maintains local Coder connection
 | Developer workstation | User opens/creates a linked workstation | Independent home with VS Code, terminal, Pi/Ori and app previews | Ten idle minutes; stop preserves files |
 | App preview | User opens an app | Process in its owning workspace; static artifacts need no workspace | Preview leases expire independently; reopening wakes compute without a chat message |
 
-Projects open directly in VS Code. Chat and developer files stay separate; explicit reviewed copies transfer source into new import folders without sharing credentials, dependencies or processes. See [projects and sync](docs/PROJECTS.md).
+Open in VS Code copies project source and opens that folder in a separate developer workstation. Reopening unchanged source preserves developer edits; returning changes to chat requires a reviewed copy. Credentials, installed dependencies and processes stay separate. See [projects and sync](docs/PROJECTS.md).
 
 The source default is `PROJECT_ENGINE=ori-pi`: Pi runs through Ori inside a headless Coder workspace. The **optional native Coder Agents engine**, used in the current local trial, runs inference in Coder's control plane and keeps model credentials/routes out of headless code. Configure it using [the native engine guide](docs/NATIVE_CODER_TRIAL.md). GUI workstations remain Pi/Ori independently of that choice.
 

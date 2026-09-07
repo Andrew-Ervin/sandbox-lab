@@ -168,7 +168,7 @@ resource "kubernetes_pod_v1" "workspace" {
       }
       resources {
         requests = { cpu = var.cpu_request, memory = var.memory_request }
-        limits = { cpu = "2", memory = var.memory_limit, "ephemeral-storage" = "512Mi" }
+        limits = { cpu = "2", memory = var.memory_limit, "ephemeral-storage" = var.gui ? "2Gi" : "512Mi" }
       }
       volume_mount {
         name = "home"
@@ -189,7 +189,7 @@ resource "kubernetes_pod_v1" "workspace" {
     }
     volume {
       name = "tmp"
-      empty_dir { size_limit = "256Mi" }
+      empty_dir { size_limit = var.gui ? "1Gi" : "256Mi" }
     }
     volume {
       name = "work"

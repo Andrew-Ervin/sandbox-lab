@@ -20,8 +20,10 @@ import {
   FolderOpen,
   LoaderCircle,
   Square,
+  PanelRightOpen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { OpenProjectWorkspaceButton } from '@/components/open-project-workspace';
 import {
   Sidebar,
   SidebarContent,
@@ -356,7 +358,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
           const response = await sessionFetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ide }),
+            body: JSON.stringify({ ide, source_path: workspace?.source_path }),
           });
           const result = (await response.json()) as {
             detail?: string;
@@ -681,6 +683,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
     setPreview(null);
   };
   const threadProject = threads.find((t) => t.id === thread)?.project_id;
+  const currentProject = projects.find((p) => p.id === threadProject);
   const active = (id: string | null) =>
     status?.jobs?.find(
       (j) => j.thread_id === id && ['running', 'queued'].includes(j.status),
@@ -788,18 +791,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
             <div className="brand">
               <Box size={24} />
               <span>Sandbox Lab</span>
-              <button
-                className="history-width-button"
-                aria-label="Change history width"
-                title="Change history width"
-                onClick={() =>
-                  setHistoryWidth(
-                    historyWidth < 270 ? 280 : historyWidth < 330 ? 360 : 240,
-                  )
-                }
-              >
-                <span>↔</span>
-              </button>
+              <SidebarTrigger aria-label="Collapse sidebar" title="Collapse sidebar" />
             </div>
             <Button
               variant="ghost"
@@ -920,34 +912,24 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
         <main className="lab-main">
           <header className="topbar">
             <div className="topbar-left">
-              <SidebarTrigger />
-              {preview && !panes.previewOpen && (
-                <Button variant="ghost" size="sm" onClick={reopenPreview}>
-                  <AppWindow size={16} /> Show preview
+              <SidebarTrigger className={panes.historyOpen ? 'md:hidden' : ''} aria-label="Open sidebar" title="Open sidebar" />
+              {view === 'chat' && currentProject && (
+                <Button variant="ghost" size="sm" className="project-header-link" title="Open project files" onClick={() => openProject(currentProject.id)}>
+                  <FolderOpen size={15} /><span>{currentProject.name}</span>
                 </Button>
               )}
-              <span className="app-title">
-                {view === 'chat'
-                  ? 'Sandbox Lab'
-                  : view === 'apps'
-                    ? 'Apps'
-                    : view === 'dev'
-                      ? 'Developer workspaces'
-                      : view === 'policy'
-                        ? 'Network & packages'
-                        : view === 'projects'
-                          ? 'Projects'
-                          : 'Conversation files'}
-              </span>
             </div>
-            <Button
-              variant="ghost"
-              onClick={() => setInspect(true)}
-              className="model-label"
-            >
-              GPT-5.6 Luna{' '}
-              <span className="effort">{status?.reasoning || 'xhigh'}</span>
-            </Button>
+            <div className="topbar-actions">
+              {view === 'chat' && currentProject && !(panes.previewOpen && preview?.ide) && (
+                <OpenProjectWorkspaceButton project={currentProject} sessionFetch={sessionFetch} onRefresh={() => refresh(true)}
+                  onOpen={(ws) => openPreview(currentProject.name, `/api/developer/workspaces/${ws.id}/open`, ws, true)} />
+              )}
+              {preview && !panes.previewOpen && (
+                <Button variant="ghost" size="icon-sm" onClick={reopenPreview} aria-label="Reopen preview" title={`Reopen ${preview.title}`}>
+                  <PanelRightOpen size={17} />
+                </Button>
+              )}
+            </div>
           </header>
           {(error || loadError) && (
             <div role="alert" className="error-banner">
@@ -973,7 +955,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                   onRefresh={() => refresh(true)}
                   onOpenDeveloper={(ws) =>
                     openPreview(
-                      ws.name,
+                      ws.project_name || ws.name,
                       `/api/developer/workspaces/${ws.id}/open`,
                       ws,
                       true,
@@ -991,22 +973,6 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
               className="conversation"
               style={{ display: view === 'chat' ? 'flex' : 'none' }}
             >
-              {threadProject && (
-                <div className="chat-project-strip">
-                  <FolderOpen size={16} />
-                  <span>
-                    {projects.find((p) => p.id === threadProject)?.name ||
-                      'Project'}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => openProject(threadProject)}
-                  >
-                    Workspace files
-                  </Button>
-                </div>
-              )}
               <ArchiveNotice
                 chat={threads.find((t) => t.id === thread)}
                 project={projects.find((p) => p.id === threadProject)}
@@ -1037,7 +1003,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                   }}
                 />
               </div>
-              {(latest || activeJob) && (
+              {activeJob && (
                 <div className="run-strip">
                   <button onClick={() => setInspect(true)}>
                     {activeJob ? (
@@ -1068,17 +1034,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                       <Square size={12} /> Stop run
                     </Button>
                   )}
-                  {latest?.preview_url && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() =>
-                        openPreview('App preview', latest.preview_url!)
-                      }
-                    >
-                      <AppWindow size={15} /> Preview
-                    </Button>
-                  )}
+
                 </div>
               )}
             </div>
@@ -1114,7 +1070,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                   onStart={() => startWorkspace(workspaceName)}
                   onOpen={(ws) =>
                     openPreview(
-                      ws.name,
+                      ws.project_name || ws.name,
                       `/api/developer/workspaces/${ws.id}/open`,
                       ws,
                       true,

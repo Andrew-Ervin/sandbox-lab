@@ -145,3 +145,60 @@ async def test_open_project_developer_rejects_archive_and_busy_project(transfer_
     store.update_project(p['id'],'alice',archived=True)
     with pytest.raises(HTTPException) as error:await links.open_developer(p['id'],'alice')
     assert error.value.status_code==409
+
+
+@pytest.mark.asyncio
+async def test_open_project_copies_source_and_returns_exact_editor_folder(transfer_setup):
+    store,p,links=transfer_setup
+    links.browser.read=AsyncMock(return_value={'files':[file()]})
+    async def publish(ws,script,payload,developer):
+        assert ws['id']=='dev' and developer is links.developer
+        assert payload['reuse'] is True and payload['files'][0]['sha256']==hashlib.sha256(base64.b64decode(payload['files'][0]['data'])).hexdigest()
+        return {'path':'.lab/imports/'+payload['id'],'file_count':1,'bytes':9}
+    links.browser.invoke=AsyncMock(side_effect=publish)
+    first=await links.open_developer(p['id'],'alice')
+    second=await links.open_developer(p['id'],'alice')
+    assert first['source_path']==second['source_path']
+    assert first['source_path'].startswith('.lab/imports/transfer_')
+    assert links.browser.read.await_count==2  # No destination export or separate review.
+    assert store.get_project(p['id'],'alice')['workspace_id']=='headless'
+    assert store.get_project(p['id'],'alice')['workspace_sync']['direction']=='to_developer'
+    links.browser.read.return_value={'files':[file(raw=b'updated source')]}
+    third=await links.open_developer(p['id'],'alice')
+    assert third['source_path']!=first['source_path']
+
+
+def test_reopening_identical_snapshot_preserves_developer_edits_at_capacity(tmp_path,importer):
+    key='transfer_'+'a'*32
+    result=importer.publish({'id':key,'files':[file()],'reuse':True},str(tmp_path))
+    edited=tmp_path/result['path']/'main.py';edited.write_text('developer edits')
+    for c in 'bc':importer.publish({'id':'transfer_'+c*32,'files':[file()]},str(tmp_path))
+    again=importer.publish({'id':key,'files':[file()],'reuse':True},str(tmp_path))
+    assert again['reused'] is True and edited.read_text()=='developer edits'
+    assert len(list((tmp_path/'.lab/imports').iterdir()))==3
+
+
+def test_reuse_rejects_symlinked_destination(tmp_path,importer):
+    key='transfer_'+'a'*32
+    inbox=tmp_path/'.lab/imports';inbox.mkdir(parents=True)
+    (inbox/key).symlink_to(tmp_path)
+    with pytest.raises(OSError):importer.publish({'id':key,'files':[file()],'reuse':True},str(tmp_path))
+
+
+def test_editor_folder_is_bounded_to_copied_source():
+    from backend.apps import developer_source_url
+    from urllib.parse import urlsplit,parse_qs
+    url=developer_source_url('http://127.0.0.1:7080/apps/vscode/','.lab/imports/transfer_'+'a'*32)
+    assert parse_qs(urlsplit(url).query)['folder']==['/home/sandbox/project/.lab/imports/transfer_'+'a'*32]
+    for invalid in ('../../.config','/etc','https://example.invalid',{'folder':'anything'}):
+        with pytest.raises(ValueError):developer_source_url('http://127.0.0.1:7080/',invalid)
+
+
+@pytest.mark.asyncio
+async def test_return_copy_reads_opened_developer_folder_and_retains_it(transfer_setup):
+    store,p,links=transfer_setup;path='.lab/imports/transfer_'+'a'*32
+    with store.db:store.db.execute('UPDATE projects SET workspace_sync=? WHERE id=?',(json.dumps({'developer_source_path':path}),p['id']))
+    plan=await links.plan(p['id'],'alice','to_chat')
+    assert links.browser.read.call_args_list[0].kwargs['path']==path
+    await links.apply(p['id'],'alice',plan['id'])
+    assert store.get_project(p['id'],'alice')['workspace_sync']['developer_source_path']==path

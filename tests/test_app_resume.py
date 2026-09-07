@@ -35,3 +35,14 @@ def test_app_recipe_confines_cwd_and_discovers_saved_static_build(tmp_path,monke
     recipe=m.discover();assert recipe['cwd']=='site' and recipe['command'][-1]=='dist'
     with pytest.raises(ValueError):m.checked({'cwd':'..','command':['sh']})
     with pytest.raises(ValueError):m.checked({'cwd':'.','command':'shell command'})
+
+
+def test_developer_preview_uses_the_copied_source_folder(tmp_path,monkeypatch):
+    monkeypatch.setattr(Path,'home',lambda:tmp_path)
+    spec=importlib.util.spec_from_file_location('app_runtime_copy',Path(__file__).parents[1]/'sandbox/app_runtime.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+    root=tmp_path/'project';root.mkdir();m.ROOT=root
+    folder=root/'.lab/imports'/('transfer_'+'a'*32);folder.mkdir(parents=True)
+    (folder/'main.go').write_text('package main')
+    with pytest.raises(ValueError):m.select_source('../outside')
+    m.select_source(str(folder.relative_to(root)))
+    assert m.ROOT==folder and m.discover()=={'cwd':'.','command':['go','run','main.go']}

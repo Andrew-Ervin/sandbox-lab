@@ -2,8 +2,6 @@
 import { useRef, useState } from 'react';
 import {
   ArrowDownToLine,
-  ArrowUpFromLine,
-  ArrowRight,
   FolderOpen,
   LoaderCircle,
   Monitor,
@@ -18,6 +16,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { StatePill } from '@/components/state-pill';
 import type { Project, Workspace } from '@/lib/lab-types';
+import { OpenProjectWorkspaceButton } from '@/components/open-project-workspace';
 
 type Fetch = (
   input: RequestInfo | URL,
@@ -37,6 +36,7 @@ type Plan = {
 };
 const bytes = (n: number) =>
   n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : (n / 1000).toFixed(1) + ' KB';
+
 
 export function WorkspaceSync({
   project,
@@ -126,8 +126,7 @@ export function WorkspaceSync({
     <section className="workspace-connection">
       <div className="workspace-connection-header">
         <div>
-          <span className="eyebrow">TWO ENVIRONMENTS, ONE PROJECT</span>
-          <h2>Work together, keep execution separate</h2>
+          <h2>Developer workstation</h2>
         </div>
       </div>
       <div className="workspace-pair">
@@ -161,36 +160,12 @@ export function WorkspaceSync({
         >
           <ArrowDownToLine size={15} /> Copy to chat
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!project.workspace_id || busy}
-          onClick={() => void review('to_developer')}
-        >
-          <ArrowUpFromLine size={15} /> Copy to VS Code
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() =>
-            onOpenDeveloper({
-              id: project.developer_workspace_id!,
-              name: project.developer_name || project.name,
-              status: project.developer_status || 'unknown',
-              harness_status: '',
-              url: '',
-              ide_url: '',
-              project_id: project.id,
-            })
-          }
-        >
-          Open VS Code <ArrowRight size={15} />
-        </Button>
+        <OpenProjectWorkspaceButton project={project} sessionFetch={sessionFetch} onRefresh={onRefresh} onOpen={onOpenDeveloper} />
       </div>
       <p className="workspace-sync-help">
-        Review a source snapshot, then copy it to an import folder. Live files
-        stay in place until you or your coding agent merge the import. Packages,
-        credentials and running processes are separate.
+        Opening VS Code copies and opens your project source automatically.
+        Existing developer edits are preserved. Review changes before copying
+        them back to chat; packages and execution remain separate.
       </p>
       {!project.workspace_id && (
         <p className="workspace-sync-help">
@@ -396,48 +371,8 @@ export function OpenProjectWorkspace({
   onRefresh: () => unknown;
   onOpen: (ws: Workspace) => void;
 }) {
-  const [busy, setBusy] = useState(false),
-    [error, setError] = useState('');
-  async function open() {
-    setBusy(true);
-    setError('');
-    try {
-      const response = await sessionFetch(
-        `/api/projects/${project.id}/developer-workspace`,
-        { method: 'POST' },
-      );
-      const ws = (await response.json()) as Workspace & { detail?: string };
-      if (!response.ok) throw Error(ws.detail || 'Could not open workstation');
-      await onRefresh();
-      onOpen(ws);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <section className="project-workstation-entry">
-      <div>
-        <strong>Work on this project in VS Code</strong>
-        <p>
-          Create a linked developer workstation, then review and copy the
-          project files you want to use.
-        </p>
-      </div>
-      <Button variant="secondary" disabled={busy} onClick={() => void open()}>
-        {busy ? (
-          <LoaderCircle size={16} className="spin" />
-        ) : (
-          <Monitor size={16} />
-        )}{' '}
-        {busy ? 'Preparing workstation…' : 'Open in VS Code'}
-      </Button>
-      {error && (
-        <p role="alert" className="project-error">
-          {error}
-        </p>
-      )}
-    </section>
-  );
+  return <section className="project-workstation-entry">
+    <div><strong>Work on this project in VS Code</strong><p>Your source opens automatically in a separate developer workstation.</p></div>
+    <OpenProjectWorkspaceButton project={project} sessionFetch={sessionFetch} onRefresh={onRefresh} onOpen={onOpen} />
+  </section>;
 }

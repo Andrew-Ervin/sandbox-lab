@@ -2,7 +2,7 @@
 
 Prefer React and shadcn for frontend changes. Prefer polars to pandas and Plotly to matplotlib. Use uv for Python environments and packages.
 
-Read README.md and docs/PROJECTS.md before changing workspace ownership or lifecycle. GUI workstations and headless projects keep separate files; only explicit reviewed source copies cross that boundary. Ordinary chat and documentation reads must not allocate a project.
+Read README.md and docs/PROJECTS.md before changing workspace ownership or lifecycle. GUI workstations and headless projects keep separate files; Open in VS Code explicitly copies project source into the separate GUI home; returning changes to chat requires a reviewed source copy. Ordinary chat and documentation reads must not allocate a project.
 
 Use the configured project engine deliberately: native Coder headless inference and in-workspace Ori/Pi have different credential boundaries. Do not weaken network, package-age or human-approval controls to make a test pass.
 

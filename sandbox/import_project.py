@@ -29,6 +29,13 @@ def publish(request,root_path=ROOT):
         lab=directory(root,'.lab',True)
         try:inbox=directory(lab,'imports',True)
         finally:os.close(lab)
+        try:existing=directory(inbox,key)
+        except FileNotFoundError:pass
+        else:
+            os.close(existing)
+            if request.get('reuse') is True:
+                return {'path':'.lab/imports/'+key,'file_count':len(files),'bytes':total,'reused':True}
+            raise ValueError('Transfer already exists')
         count=0
         with os.scandir(inbox) as scan:
             for n,entry in enumerate(scan):

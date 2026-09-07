@@ -1,4 +1,4 @@
-"""Human-only project links and reviewed file copies across separate workspaces."""
+"""Human-only project handoffs and reviewed return copies across separate workspaces."""
 import asyncio,base64,hashlib,json,time,uuid
 from fastapi import HTTPException,Request
 from pydantic import BaseModel,ConfigDict
@@ -65,13 +65,31 @@ class WorkspaceLinks:
         if lock.locked():raise HTTPException(409,'This project is busy; retry when its current operation finishes')
         async with lock:
             p=self.project(pid,owner)
+            self.idle(p,owner)
             if p['developer_workspace_id']:
                 ws=await self.dev_workspace(p['developer_workspace_id'],True)
             else:
                 # Stable name makes retry after a lost response reuse the same workstation.
                 ws=await self.developer.start('project-'+pid.removeprefix('prj_')[:20])
                 p=self.store.link_developer(ws['id'],owner,ws['name'],pid)
-            return {**ws,'project_id':pid,'project_name':p['name']}
+                await self.developer.prepare(ws)
+            result={**ws,'project_id':pid,'project_name':p['name']}
+            if p['workspace_id']:
+                async with self.slots:
+                    ai=await self.browser.workspace(p,owner,True)
+                    source=await self.browser.read(ai,'export')
+                    files=checked_files(source)
+                    if files:
+                        # Same project + source snapshot opens the same developer copy.
+                        # Local edits there are retained, never overwritten on reopen.
+                        manifest=sorted((f['path'],f['sha256']) for f in files)
+                        digest=hashlib.sha256(json.dumps([pid,manifest]).encode()).hexdigest()
+                        key='transfer_'+digest[:32]
+                        copied=await self.browser.invoke(ws,(ROOT/'sandbox/import_project.py').read_text(),{'id':key,'files':files,'reuse':True},self.developer)
+                        copied.update(direction='to_developer',at=time.time(),developer_source_path=copied['path'])
+                        with self.store.db:self.store.db.execute('UPDATE projects SET workspace_sync=? WHERE id=? AND owner=?',(json.dumps(copied),pid,owner))
+                        result.update(source_path=copied['path'],source_copy=copied)
+            return result
 
     async def plan(self,pid,owner,direction):
         p=self.project(pid,owner)
@@ -88,8 +106,9 @@ class WorkspaceLinks:
                 dev=await self.dev_workspace(p['developer_workspace_id'],True)
                 ai=await self.browser.workspace(p,owner,True)
                 from_dev=direction=='to_chat'
-                source=await self.browser.read(dev if from_dev else ai,'export',developer=self.developer if from_dev else None)
-                destination=await self.browser.read(ai if from_dev else dev,'export',developer=None if from_dev else self.developer)
+                developer_path=(p.get('workspace_sync') or {}).get('developer_source_path','')
+                source=await self.browser.read(dev if from_dev else ai,'export',path=developer_path if from_dev else '',developer=self.developer if from_dev else None)
+                destination=await self.browser.read(ai if from_dev else dev,'export',path='' if from_dev else developer_path,developer=None if from_dev else self.developer)
                 files=checked_files(source);existing={f['path']:f['sha256'] for f in checked_files(destination)}
                 if not files:raise HTTPException(409,'No eligible source files to copy')
                 key='transfer_'+uuid.uuid4().hex
@@ -110,6 +129,7 @@ class WorkspaceLinks:
             ws=await self.dev_workspace(p['developer_workspace_id'],True) if to_dev else await self.browser.workspace(p,owner,True)
             result=await self.browser.invoke(ws,(ROOT/'sandbox/import_project.py').read_text(),{'id':key,'files':plan['files']},self.developer if to_dev else None)
             result.update(direction=plan['direction'],at=time.time())
+            result['developer_source_path']=result['path'] if to_dev else (p.get('workspace_sync') or {}).get('developer_source_path','')
             with self.store.db:self.store.db.execute('UPDATE projects SET workspace_sync=? WHERE id=? AND owner=?',(json.dumps(result),pid,owner))
             self.plans.pop(key,None)
             return result
@@ -130,7 +150,8 @@ def install_workspace_links(app,store,coder,developer):
     @app.post('/api/projects/{pid}/developer-workspace')
     async def open_developer(pid:str,request:Request):
         try:return await links.open_developer(pid,request.state.owner)
-        except (ValueError,RuntimeError,asyncio.TimeoutError):raise HTTPException(503,'Could not open the developer workstation; retry from this project')
+        except RuntimeError as exc:raise HTTPException(503,str(exc))
+        except (ValueError,asyncio.TimeoutError):raise HTTPException(503,'Could not copy source and open the workstation. Check readiness, source size, and the three-import limit.')
 
     @app.post('/api/developer/workspaces/{wid}/project')
     async def link(wid:str,request:Request,body:Link):
