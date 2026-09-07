@@ -1,0 +1,2441 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lab-sandboxes
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.35
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lab-agents
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.35
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lab-dev
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.35
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lab-control
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.35
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: coder
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.35
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: coder-ai
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.35
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: capacity
+  namespace: lab-sandboxes
+spec:
+  hard:
+    pods: '10'
+    requests.cpu: '4'
+    limits.cpu: '10'
+    requests.memory: 4Gi
+    limits.memory: 10Gi
+    requests.storage: 10Gi
+    persistentvolumeclaims: '4'
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: unprivileged
+  namespace: lab-sandboxes
+automountServiceAccountToken: false
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: lab-sandboxes
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: capacity
+  namespace: lab-agents
+spec:
+  hard:
+    pods: '4'
+    requests.cpu: '3'
+    limits.cpu: '8'
+    requests.memory: 3Gi
+    limits.memory: 16Gi
+    requests.storage: 100Gi
+    persistentvolumeclaims: '50'
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: unprivileged
+  namespace: lab-agents
+automountServiceAccountToken: false
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: lab-agents
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: capacity
+  namespace: lab-dev
+spec:
+  hard:
+    pods: '3'
+    requests.cpu: '2'
+    limits.cpu: '6'
+    requests.memory: 3Gi
+    limits.memory: 12Gi
+    requests.storage: 40Gi
+    persistentvolumeclaims: '20'
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: unprivileged
+  namespace: lab-dev
+automountServiceAccountToken: false
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: lab-dev
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: broker
+  namespace: lab-sandboxes
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: broker
+  namespace: lab-sandboxes
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - pods
+  - persistentvolumeclaims
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - patch
+  - delete
+- apiGroups:
+  - ''
+  resources:
+  - pods/exec
+  - pods/portforward
+  verbs:
+  - create
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: broker
+  namespace: lab-sandboxes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: broker
+subjects:
+- kind: ServiceAccount
+  name: broker
+  namespace: lab-sandboxes
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coder
+  namespace: coder
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workspace-provisioner
+  namespace: lab-dev
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - pods
+  - persistentvolumeclaims
+  - services
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workspace-provisioner
+  namespace: lab-agents
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - pods
+  - persistentvolumeclaims
+  - services
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coder-provisioner
+  namespace: lab-agents
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: workspace-provisioner
+subjects:
+- kind: ServiceAccount
+  name: coder
+  namespace: coder-ai
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coder-provisioner
+  namespace: lab-dev
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: workspace-provisioner
+subjects:
+- kind: ServiceAccount
+  name: coder
+  namespace: coder
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allowed-egress
+  namespace: lab-sandboxes
+spec:
+  podSelector:
+    matchLabels:
+      lab/mode: persistent
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-control
+      podSelector:
+        matchLabels:
+          app: sandbox-dns
+    ports:
+    - protocol: UDP
+      port: 1053
+    - protocol: TCP
+      port: 1053
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-control
+      podSelector:
+        matchLabels:
+          app: package-proxy
+    ports:
+    - protocol: TCP
+      port: 3128
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allowed-egress
+  namespace: lab-agents
+spec:
+  podSelector:
+    matchLabels: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-control
+      podSelector:
+        matchLabels:
+          app: sandbox-dns
+    ports:
+    - protocol: UDP
+      port: 1053
+    - protocol: TCP
+      port: 1053
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-control
+      podSelector:
+        matchLabels:
+          app: package-proxy
+    ports:
+    - protocol: TCP
+      port: 3128
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: coder-ai
+      podSelector:
+        matchLabels:
+          app: coder
+    ports:
+    - protocol: TCP
+      port: 7080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allowed-egress
+  namespace: lab-dev
+spec:
+  podSelector:
+    matchLabels: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-control
+      podSelector:
+        matchLabels:
+          app: sandbox-dns
+    ports:
+    - protocol: UDP
+      port: 1053
+    - protocol: TCP
+      port: 1053
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-control
+      podSelector:
+        matchLabels:
+          app: model-gateway
+    ports:
+    - protocol: TCP
+      port: 8080
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-control
+      podSelector:
+        matchLabels:
+          app: package-proxy
+    ports:
+    - protocol: TCP
+      port: 3128
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: coder
+      podSelector:
+        matchLabels:
+          app: coder
+    ports:
+    - protocol: TCP
+      port: 7080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: model-gateway
+  namespace: lab-control
+spec:
+  podSelector:
+    matchLabels:
+      app: model-gateway
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-dev
+      podSelector:
+        matchLabels: {}
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-control
+      podSelector:
+        matchLabels:
+          app: model-gateway-egress
+    ports:
+    - protocol: TCP
+      port: 3129
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: package-proxy
+  namespace: lab-control
+spec:
+  podSelector:
+    matchLabels:
+      app: package-proxy
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-sandboxes
+      podSelector:
+        matchLabels:
+          lab/mode: persistent
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-dev
+      podSelector:
+        matchLabels: {}
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-agents
+      podSelector:
+        matchLabels: {}
+    ports:
+    - protocol: TCP
+      port: 3128
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-control
+      podSelector:
+        matchLabels:
+          app: package-proxy-egress
+    ports:
+    - protocol: TCP
+      port: 3129
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-code
+  namespace: lab-control
+data:
+  gateway.py: "\"\"\"Fixed-upstream model gateway. Capabilities expire, but are NOT\
+    \ Pi-only.\"\"\"\nimport asyncio\nimport base64\nimport hashlib\nimport hmac\n\
+    import json\nimport logging\nimport os\nimport re\nimport time\nfrom contextlib\
+    \ import asynccontextmanager\n\nimport httpx\nfrom fastapi import FastAPI, HTTPException,\
+    \ Request\nfrom fastapi.responses import StreamingResponse, JSONResponse\ntry:\n\
+    \    from sandbox.model_policy import provider_policy, require_zdr, web_search_tool\n\
+    except ModuleNotFoundError:\n    from model_policy import provider_policy, require_zdr,\
+    \ web_search_tool\n\nMAX_BODY = int(os.getenv('MODEL_MAX_BODY_BYTES','2000000'))\n\
+    AUDIENCE = 'sandbox-lab-model'\nsecret = os.environ['LAB_TOKEN_SECRET'].encode()\n\
+    if len(secret) < 32:\n    raise RuntimeError('LAB_TOKEN_SECRET must contain at\
+    \ least 32 bytes')\nkey = os.environ['OPENROUTER_API_KEY']\nmodel = os.environ['OPENROUTER_MODEL']\n\
+    allow_search = os.getenv('LAB_ALLOW_WEB_SEARCH', 'true').lower() == 'true'\n\n\
+    \n@asynccontextmanager\nasync def lifespan(app):\n    async with httpx.AsyncClient(timeout=180,\
+    \ proxy=os.getenv(\"UPSTREAM_PROXY\") or None, trust_env=False, follow_redirects=False,\n\
+    \                                limits=httpx.Limits(max_connections=64, max_keepalive_connections=16))\
+    \ as upstream:\n        app.state.upstream = upstream\n        yield\n\n\napp\
+    \ = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)\n\
+    \n\n@app.exception_handler(HTTPException)\nasync def gateway_error(request, error):\n\
+    \    # OpenAI-compatible shape lets Pi show the actual safe error instead of 'no\
+    \ body'.\n    return JSONResponse(status_code=error.status_code, content={'error':\
+    \ {\n        'message': str(error.detail), 'type': 'gateway_error', 'code': 'lab_'\
+    \ + str(error.status_code)}},\n        headers={'Cache-Control': 'no-store'})\n\
+    \n\ndef authorize(request):\n    try:\n        header = request.headers.get('authorization',\
+    \ '')\n        if not header and request.headers.get('x-api-key'):\n         \
+    \   header = 'Bearer ' + request.headers['x-api-key']\n        if not header.startswith('Bearer\
+    \ ') or len(header) > 4096:\n            raise ValueError()\n        payload,\
+    \ signature = header[7:].split('.')\n        expected = hmac.new(secret, payload.encode(),\
+    \ hashlib.sha256).hexdigest()\n        if not hmac.compare_digest(expected, signature):\n\
+    \            raise ValueError()\n        data = json.loads(base64.urlsafe_b64decode(payload\
+    \ + '=' * (-len(payload) % 4)))\n        now = time.time()\n        if not isinstance(data,\
+    \ dict) or data.get('aud') != AUDIENCE or data.get('model') != model:\n      \
+    \      raise ValueError()\n        if any(type(data.get(k)) is not int for k in\
+    \ ('iat', 'exp')):\n            raise ValueError()\n        if not (now - 3630\
+    \ <= data['iat'] <= now + 30 and now < data['exp'] <= data['iat'] + 3600):\n \
+    \           raise ValueError()\n        if not re.fullmatch(r'[a-f0-9]{32}', data.get('jti',\
+    \ '')):\n            raise ValueError()\n        if not isinstance(data.get('workspace'),\
+    \ str) or not 1 <= len(data['workspace']) <= 128:\n            raise ValueError()\n\
+    \        return data\n    except (ValueError, KeyError, TypeError, UnicodeError):\n\
+    \        raise HTTPException(403, 'Invalid model capability') from None\n\n\n\
+    def compatible_messages(messages):\n    # Old Pi OpenAI sessions can replay provider-specific\
+    \ reasoning that prevents\n    # ZDR routing. Omit it only from completed turns\
+    \ on the outbound request.\n    # Keep visible/tool history and current-turn reasoning\
+    \ for tool continuation;\n    # never rewrite saved sessions or strip other providers'\
+    \ signed thinking.\n    if not model.startswith('openai/'):\n        return messages\n\
+    \    last_user = max((i for i, message in enumerate(messages) if message['role']\
+    \ == 'user'), default=-1)\n    replay_fields = {'reasoning_details', 'reasoning',\
+    \ 'reasoning_content'}\n    return [\n        {k: v for k, v in message.items()\
+    \ if k not in replay_fields}\n        if i < last_user and message['role'] ==\
+    \ 'assistant' else message\n        for i, message in enumerate(messages)\n  \
+    \  ]\n\n\ndef prepare_body(body):\n    if not isinstance(body, dict):\n      \
+    \  raise HTTPException(400, 'Expected a JSON object')\n    messages = body.get('messages')\n\
+    \    if not isinstance(messages, list) or not messages:\n        raise HTTPException(400,\
+    \ 'Expected a non-empty messages array')\n    for message in messages:\n     \
+    \   if not isinstance(message, dict) or message.get('role') not in {'system',\
+    \ 'developer', 'user', 'assistant', 'tool'}:\n            raise HTTPException(400,\
+    \ 'Invalid message')\n        content = message.get('content')\n        if content\
+    \ is not None and not isinstance(content, (str, list)):\n            raise HTTPException(400,\
+    \ 'Invalid message content')\n        if isinstance(content, list):\n        \
+    \    for part in content:\n                if not isinstance(part, dict):\n  \
+    \                  raise HTTPException(400, 'Invalid content part')\n        \
+    \        if part.get('type') == 'text' and isinstance(part.get('text'), str):\n\
+    \                    continue\n                # No provider-side fetching of\
+    \ attacker-controlled URLs.\n                image = part.get('image_url')\n \
+    \               if part.get('type') == 'image_url' and isinstance(image, dict)\
+    \ and re.fullmatch(\n                    r'data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+',\
+    \ str(image.get('url', ''))):\n                    continue\n                raise\
+    \ HTTPException(400, 'Only text and inline images are permitted')\n    tools =\
+    \ body.get('tools', [])\n    if not isinstance(tools, list) or len(tools) > 32:\n\
+    \        raise HTTPException(400, 'Invalid tools')\n    tools = [t for t in tools\
+    \ if isinstance(t, dict) and t.get('type') == 'function' and isinstance(t.get('function'),\
+    \ dict)]\n    allowed = {'messages', 'tool_choice', 'stream', 'temperature', 'top_p',\
+    \ 'stop', 'parallel_tool_calls'}\n    result = {k: v for k, v in body.items()\
+    \ if k in allowed}\n    result['messages'] = compatible_messages(messages)\n \
+    \   if 'stream' in result and type(result['stream']) is not bool:\n        raise\
+    \ HTTPException(400, 'Invalid streaming option')\n    result.update(model=model,\
+    \ max_tokens=16000,\n                  reasoning={'effort': os.getenv('OPENROUTER_REASONING',\
+    \ 'xhigh')},\n                  provider=provider_policy())\n    # Search is an\
+    \ approved disclosure channel, not a DLP control. Admin can disable it.\n    if\
+    \ allow_search:\n        search_tool=web_search_tool()\n        if search_tool:\n\
+    \            tools.append(search_tool)\n            result['max_tool_calls'] =\
+    \ search_tool['parameters']['max_uses']\n    if tools:\n        result['tools']\
+    \ = tools\n    else:\n        result.pop('tool_choice', None)\n    return result\n\
+    \n\ndef prepare_native(body, protocol):\n    \"\"\"Allow local harness tools,\
+    \ never upstream URL fetching or server-side tools.\"\"\"\n    if not isinstance(body,\
+    \ dict):\n        raise HTTPException(400, 'Expected a JSON object')\n    def\
+    \ check(value):\n        if isinstance(value, dict):\n            for key, child\
+    \ in value.items():\n                if key in {'image_url', 'file_url', 'url'}:\n\
+    \                    if not isinstance(child, str) or not re.fullmatch(r'data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+',\
+    \ child):\n                        raise HTTPException(400, 'Remote content is\
+    \ not permitted')\n                if key in {'file_id', 'server_url'}:\n    \
+    \                raise HTTPException(400, 'Remote content is not permitted')\n\
+    \                check(child)\n        elif isinstance(value, list):\n       \
+    \     for child in value: check(child)\n    field = 'input' if protocol == 'responses'\
+    \ else 'messages'\n    content = body.get(field)\n    if not isinstance(content,\
+    \ (str, list)) or not content:\n        raise HTTPException(400, 'Missing conversation\
+    \ input')\n    check(content)\n    tools = body.get('tools', [])\n    if not isinstance(tools,\
+    \ list) or len(tools) > 128:\n        raise HTTPException(400, 'Invalid tools')\n\
+    \    for tool in tools:\n        if not isinstance(tool, dict): raise HTTPException(400,\
+    \ 'Invalid tool')\n        if protocol == 'responses':\n            if tool.get('type')\
+    \ not in {'function', 'custom'}:\n                raise HTTPException(400, 'Only\
+    \ local tools are permitted')\n        elif tool.get('type', 'custom') != 'custom'\
+    \ or not isinstance(tool.get('name'), str):\n            raise HTTPException(400,\
+    \ 'Only local tools are permitted')\n    allowed = {field, 'instructions', 'system',\
+    \ 'tools', 'tool_choice', 'stream', 'parallel_tool_calls'}\n    result = {k:v\
+    \ for k,v in body.items() if k in allowed}\n    result.update(model=model, provider=provider_policy())\n\
+    \    if protocol == 'responses':\n        result.update(store=False, max_output_tokens=16000,\n\
+    \                      reasoning={'effort': os.getenv('OPENROUTER_REASONING',\
+    \ 'xhigh')})\n    else:\n        result.update(max_tokens=16000)\n    return result\n\
+    \n\n@app.post('/v1/responses')\n@app.post('/v1/messages')\n@app.post('/v1/chat/completions')\n\
+    async def completions(request: Request):\n    claims = authorize(request)\n  \
+    \  try:\n        size = int(request.headers.get('content-length', '0'))\n    \
+    \    if size < 0:\n            raise ValueError()\n    except ValueError:\n  \
+    \      raise HTTPException(400, 'Invalid content length') from None\n    if size\
+    \ > MAX_BODY:\n        raise HTTPException(413)\n    raw = bytearray()\n    try:\n\
+    \        async with asyncio.timeout(30):\n            async for chunk in request.stream():\n\
+    \                if len(raw) + len(chunk) > MAX_BODY:\n                    raise\
+    \ HTTPException(413)\n                raw.extend(chunk)\n    except TimeoutError:\n\
+    \        raise HTTPException(408) from None\n    try:\n        protocol = request.url.path.rsplit('/',\
+    \ 1)[-1]\n        body = prepare_body(json.loads(raw)) if protocol == 'completions'\
+    \ else prepare_native(json.loads(raw), protocol)\n    except (ValueError, UnicodeError,\
+    \ RecursionError):\n        raise HTTPException(400, 'Invalid JSON') from None\n\
+    \    client = request.app.state.upstream\n    try:\n        upstream = await client.send(client.build_request(\n\
+    \            'POST', 'https://openrouter.ai/api/v1/' + ('chat/completions' if\
+    \ protocol == 'completions' else protocol), json=body,\n            headers={'Authorization':\
+    \ 'Bearer ' + key, 'X-Title': 'Sandbox Lab'}), stream=True)\n    except httpx.HTTPError\
+    \ as error:\n        logging.getLogger('lab.model').warning('Model transport failure:\
+    \ %s',type(error).__name__)\n        raise HTTPException(502, 'Model provider\
+    \ unavailable') from None\n    if upstream.status_code >= 300:\n        # Only\
+    \ fixed diagnostic categories/shape; never log prompt/provider error text.\n \
+    \       error_bytes=bytearray()\n        async for part in upstream.aiter_bytes():\n\
+    \            if len(error_bytes)+len(part)>65536: break\n            error_bytes.extend(part)\n\
+    \        description=error_bytes.decode('utf-8',errors='replace').lower()\n  \
+    \      categories=[label for label,needle in [('privacy','data policy'),('zdr','zdr'),('context','context\
+    \ length'),('image','image'),('tools','tool'),('parameters','parameter'),('routing','endpoint'),('rate','rate\
+    \ limit')] if needle in description]\n        logging.getLogger('lab.model').warning('Model\
+    \ provider rejected request: status=%s categories=%s fields=%s messages=%s tools=%s',upstream.status_code,','.join(categories),','.join(sorted(body)),len(body.get('messages',\
+    \ body.get('input', []))),len(body.get('tools',[])))\n        await upstream.aclose()\n\
+    \        if 'privacy' in categories or 'zdr' in categories:\n            raise\
+    \ HTTPException(403, 'OpenRouter could not route this request under the required\
+    \ privacy policy. No privacy setting was relaxed. Ask the administrator to check\
+    \ provider eligibility and saved-session compatibility.')\n        raise HTTPException(502,\
+    \ 'Model provider rejected request')\n\n    async def chunks():\n        try:\n\
+    \            async for chunk in upstream.aiter_bytes():\n                yield\
+    \ chunk\n        finally:\n            await upstream.aclose()\n    return StreamingResponse(chunks(),\
+    \ media_type=upstream.headers.get('content-type', 'application/json'),\n     \
+    \                        headers={'Cache-Control': 'no-store'})\n\n\n@app.get('/healthz')\n\
+    async def health():\n    return {'ok': True}\n\nSTT_MODEL = 'microsoft/mai-transcribe-2'\n\
+    MAX_AUDIO_BYTES = int(os.getenv('DICTATION_MAX_BYTES','10000000'))\n\n\ndef prepare_transcription(body):\n\
+    \    if not isinstance(body, dict) or body.get('format') not in {'webm','ogg','mp4','wav'}:\n\
+    \        raise HTTPException(400, 'Unsupported recording format')\n    encoded=body.get('data')\n\
+    \    if not isinstance(encoded,str) or len(encoded)>((MAX_AUDIO_BYTES+2)//3)*4:\n\
+    \        raise HTTPException(413, 'Recording is too large')\n    try: raw=base64.b64decode(encoded,validate=True)\n\
+    \    except ValueError: raise HTTPException(400,'Invalid recording') from None\n\
+    \    if not raw or len(raw)>MAX_AUDIO_BYTES: raise HTTPException(400,'Empty or\
+    \ oversized recording')\n    return {'model':STT_MODEL,'input_audio':{'data':encoded,'format':body['format']},\n\
+    \            'response_format':'json','provider':provider_policy(speech=True)}\n\
+    \n\nasync def verify_transcription_privacy(client):\n    if not require_zdr():\n\
+    \        return\n    # STT ignores provider selection. Refuse unless every advertised\
+    \ endpoint is ZDR.\n    try:\n        endpoints,zdr=await asyncio.gather(\n  \
+    \          client.get('https://openrouter.ai/api/v1/models/'+STT_MODEL+'/endpoints'),\n\
+    \            client.get('https://openrouter.ai/api/v1/endpoints/zdr'))\n     \
+    \   endpoints.raise_for_status();zdr.raise_for_status()\n        candidates=endpoints.json()['data']['endpoints']\n\
+    \        eligible={(e['model_id'],e['tag'],e['name']) for e in zdr.json()['data']}\n\
+    \        if not candidates or any((e['model_id'],e['tag'],e['name']) not in eligible\
+    \ for e in candidates):\n            raise ValueError('Unverified endpoint')\n\
+    \    except (httpx.HTTPError,ValueError,KeyError,TypeError):\n        raise HTTPException(503,'ZDR\
+    \ transcription eligibility could not be verified. Audio was not sent.') from\
+    \ None\n\n\n@app.post('/v1/audio/transcriptions')\nasync def transcription(request:\
+    \ Request):\n    claims=authorize(request)\n    raw=bytearray()\n    try:\n  \
+    \      async with asyncio.timeout(20):\n            async for chunk in request.stream():\n\
+    \                if len(raw)+len(chunk)>((MAX_AUDIO_BYTES+2)//3)*4+1024:raise\
+    \ HTTPException(413,'Recording is too large')\n                raw.extend(chunk)\n\
+    \        body=prepare_transcription(json.loads(raw))\n    except (ValueError,UnicodeError,RecursionError):raise\
+    \ HTTPException(400,'Invalid recording request') from None\n    except TimeoutError:raise\
+    \ HTTPException(408,'Recording upload timed out') from None\n    client=request.app.state.upstream\n\
+    \    await verify_transcription_privacy(client)\n    try:\n        response=await\
+    \ client.post('https://openrouter.ai/api/v1/audio/transcriptions',json=body,\n\
+    \            headers={'Authorization':'Bearer '+key,'X-Title':'Sandbox Lab Dictation'},timeout=75)\n\
+    \        response.raise_for_status()\n        text=response.json().get('text')\n\
+    \        if not isinstance(text,str):raise ValueError('Missing transcript')\n\
+    \    except httpx.TimeoutException:\n        raise HTTPException(504,'Transcription\
+    \ timed out. Please try again; audio was not saved locally.') from None\n    except\
+    \ httpx.HTTPStatusError as exc:\n        code=exc.response.status_code\n     \
+    \   message={400:'The speech provider rejected the recording format. Reload VS\
+    \ Code to update dictation.',401:'Transcription credentials need operator attention.',402:'Transcription\
+    \ account credit is unavailable.',403:'Transcription access was refused.',413:'The\
+    \ speech provider rejected the recording size.',429:'The speech provider is busy\
+    \ or rate limited. Please retry shortly.'}.get(code,'The speech provider is temporarily\
+    \ unavailable. Please try again.')\n        raise HTTPException(502,message+'\
+    \ Audio was not saved locally.') from None\n    except (httpx.HTTPError,ValueError):\n\
+    \        raise HTTPException(502,'Transcription returned an invalid response.\
+    \ Please try again; audio was not saved locally.') from None\n    return JSONResponse({'text':text},headers={'Cache-Control':'no-store'})\n"
+  model_policy.py: "\"\"\"Operator-owned routing, shared by chat, the workspace gateway\
+    \ and Coder setup.\"\"\"\nimport os\n\n\ndef web_search_tool():\n    \"\"\"Only\
+    \ the operator enables server-side search; callers cannot choose a provider.\"\
+    \"\"\n    if os.getenv('LAB_ALLOW_WEB_SEARCH', 'true').lower() != 'true':\n  \
+    \      return None\n    return {'type': 'openrouter:web_search', 'parameters':\
+    \ {\n        'engine': 'exa', 'max_results': int(os.getenv('WEB_SEARCH_MAX_RESULTS',\
+    \ '3')),\n        'max_total_results': int(os.getenv('WEB_SEARCH_MAX_TOTAL_RESULTS',\
+    \ '6')),\n        'max_uses': int(os.getenv('WEB_SEARCH_MAX_USES', '2')), 'search_context_size':\
+    \ 'low'}}\n\n\ndef require_zdr():\n    raw = os.getenv('OPENROUTER_REQUIRE_ZDR',\
+    \ 'false').lower()\n    if raw not in {'true', 'false'}:\n        raise ValueError('OPENROUTER_REQUIRE_ZDR\
+    \ must be true or false')\n    return raw == 'true'\n\n\ndef provider_policy(*,\
+    \ speech=False):\n    collection = os.getenv('OPENROUTER_DATA_COLLECTION', 'deny')\n\
+    \    if collection not in {'deny', 'allow'}:\n        raise ValueError('OPENROUTER_DATA_COLLECTION\
+    \ must be deny or allow')\n    policy = {'zdr': require_zdr(), 'data_collection':\
+    \ collection}\n    # OpenRouter transcription ignores provider selection. Its\
+    \ endpoint eligibility\n    # is checked separately when ZDR is enabled; LLM routing\
+    \ does not apply to STT.\n    if not speech:\n        for field, default in [('order',\
+    \ 'amazon-bedrock,openai'), ('ignore', 'azure')]:\n            values = [s.strip()\
+    \ for s in os.getenv('OPENROUTER_PROVIDER_' + field.upper(), default).split(',')\
+    \ if s.strip()]\n            if values:\n                policy[field] = values\n\
+    \        policy['allow_fallbacks'] = True\n    return policy\n"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: model-gateway
+  namespace: lab-control
+spec:
+  selector:
+    app: model-gateway
+  ports:
+  - port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-gateway
+  namespace: lab-control
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: model-gateway
+  template:
+    metadata:
+      labels:
+        app: model-gateway
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+      containers:
+      - name: model-gateway
+        image: sandbox-lab/gateway:local
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        command:
+        - uvicorn
+        - gateway:app
+        - --app-dir
+        - /app
+        - --host
+        - 0.0.0.0
+        - --port
+        - '8080'
+        - --no-access-log
+        env:
+        - name: WEB_SEARCH_MAX_RESULTS
+          value: '3'
+        - name: WEB_SEARCH_MAX_TOTAL_RESULTS
+          value: '6'
+        - name: WEB_SEARCH_MAX_USES
+          value: '2'
+        - name: DICTATION_MAX_BYTES
+          value: '10000000'
+        - name: MODEL_MAX_BODY_BYTES
+          value: '2000000'
+        - name: OPENROUTER_REQUIRE_ZDR
+          value: 'false'
+        - name: OPENROUTER_DATA_COLLECTION
+          value: deny
+        - name: OPENROUTER_PROVIDER_ORDER
+          value: amazon-bedrock,openai
+        - name: OPENROUTER_PROVIDER_IGNORE
+          value: azure
+        - name: UPSTREAM_PROXY
+          value: http://model-gateway-egress.lab-control.svc.cluster.local:3129
+        envFrom:
+        - secretRef:
+            name: model-credentials
+        volumeMounts:
+        - name: code
+          mountPath: /app
+          readOnly: true
+        ports:
+        - containerPort: 8080
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          periodSeconds: 3
+          timeoutSeconds: 5
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 36
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+      volumes:
+      - name: code
+        configMap:
+          name: gateway-code
+  strategy:
+    type: Recreate
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: package-code
+  namespace: lab-control
+data:
+  package_gateway.py: "\"\"\"Read-only, age-gated package facade. No arbitrary URL,\
+    \ CONNECT, publish or upload API.\"\"\"\nimport asyncio,base64,hashlib,html,json,os,re,time,sqlite3,tempfile\n\
+    from contextlib import asynccontextmanager\nimport anyio\nfrom collections.abc\
+    \ import MutableMapping\nfrom datetime import datetime,timezone\nfrom pathlib\
+    \ import Path\nfrom urllib.parse import quote,urlsplit\nimport httpx\nfrom fastapi\
+    \ import FastAPI,HTTPException,Request\nfrom fastapi.responses import Response,FileResponse\n\
+    @asynccontextmanager\nasync def lifespan(app):\n    # This service uses Recreate:\
+    \ no other replica can own these partial downloads.\n    for partial in CACHE.glob('.download-*'):\n\
+    \        if partial.is_file():partial.unlink()\n    yield\n\napp=FastAPI(docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)\n\
+    BASE='http://package-proxy.lab-control.svc.cluster.local:3128'\nCACHE=Path(os.getenv('PACKAGE_CACHE','/cache'));POLICY=Path(os.getenv('PACKAGE_POLICY','/policy/packages.json'))\n\
+    MAX_BYTES=250_000_000  # Approved limit for large coding-harness artifacts.\n\
+    class ArtifactCatalog(MutableMapping):\n    \"\"\"Disk-backed registry: wheel\
+    \ metadata must not exhaust a global dict limit.\"\"\"\n    def __init__(self,path):\n\
+    \        path.parent.mkdir(parents=True,exist_ok=True)\n        self.db=sqlite3.connect(path,timeout=10,check_same_thread=False)\n\
+    \        self.db.execute('PRAGMA max_page_count=65536')  # 256 MiB at default\
+    \ page size\n        self.db.execute('CREATE TABLE IF NOT EXISTS artifacts (id\
+    \ TEXT PRIMARY KEY, entry TEXT NOT NULL)')\n        self.db.commit()\n    def\
+    \ __getitem__(self,key):\n        row=self.db.execute('SELECT entry FROM artifacts\
+    \ WHERE id=?',(key,)).fetchone()\n        if row is None:raise KeyError(key)\n\
+    \        return json.loads(row[0])\n    def __setitem__(self,key,value):\n   \
+    \     try:self.db.execute('INSERT OR REPLACE INTO artifacts VALUES (?,?)',(key,json.dumps(value)))\n\
+    \        except sqlite3.Error:raise HTTPException(503,'Package catalog storage\
+    \ unavailable') from None\n    def __delitem__(self,key):\n        if not self.db.execute('DELETE\
+    \ FROM artifacts WHERE id=?',(key,)).rowcount:raise KeyError(key)\n    def __iter__(self):return\
+    \ (r[0] for r in self.db.execute('SELECT id FROM artifacts'))\n    def __len__(self):return\
+    \ self.db.execute('SELECT COUNT(*) FROM artifacts').fetchone()[0]\n    def commit(self):self.db.commit()\n\
+    \nmemo={}; admitted={}; downloads=ArtifactCatalog(CACHE/'artifacts.sqlite')\n\
+    catalog_path=CACHE/'catalog.json'\nif catalog_path.exists():\n    saved=json.loads(catalog_path.read_text());downloads.update(saved.get('downloads',{}));downloads.commit();admitted.update({k:set(v)\
+    \ for k,v in saved.get('admitted',{}).items()})\ncatalog_revision=0;catalog_saved=0\n\
+    def save_catalog():\n    global catalog_saved\n    downloads.commit()\n    if\
+    \ catalog_revision==catalog_saved:return\n    CACHE.mkdir(parents=True,exist_ok=True);temp=CACHE/'catalog.tmp'\n\
+    \    temp.write_text(json.dumps({'download_backend':'sqlite','admitted':{k:sorted(v)\
+    \ for k,v in admitted.items()}}));temp.replace(catalog_path);catalog_saved=catalog_revision\n\
+    HOSTS={'pypi.org','files.pythonhosted.org','registry.npmjs.org','index.crates.io','crates.io','static.crates.io','proxy.golang.org','api.nuget.org','sum.golang.org','us-east.pkg.julialang.org','storage.julialang.net'}\n\
+    def policy():return json.loads(POLICY.read_text())\ndef allowed(eco,name):\n \
+    \   # No package-name allowlist. Only fixed registry routes and valid identifiers.\n\
+    \    patterns={'python':r'[a-z0-9_.-]{1,120}','npm':r'(?:@[a-z0-9_.-]+/)?[a-z0-9_.-]{1,160}',\n\
+    \              'cargo':r'[a-zA-Z0-9_-]{1,100}','nuget':r'[a-z0-9_.-]{1,120}',\n\
+    \              'go':r'[a-zA-Z0-9!._~/-]{1,240}','julia':r'(?:registry|package)/[a-f0-9-]{36}|artifact'}\n\
+    \    if eco not in patterns or not re.fullmatch(patterns[eco],name) or '..' in\
+    \ name or name.startswith('/'):\n        raise HTTPException(400,'Invalid registry\
+    \ package identifier')\ndef admit(eco,names):\n    global catalog_revision\n \
+    \   values=admitted.setdefault(eco,set())\n    if len(values)>4000:raise HTTPException(503,'Package\
+    \ dependency catalog is full')\n    before=len(values);values.update(names)\n\
+    \    if len(values)!=before:catalog_revision+=1\ndef old_enough(eco,name,version,published):\n\
+    \    p=policy()\n    for entry in p.get('overrides',[]):\n        if (entry.get('ecosystem'),entry.get('package'),entry.get('version'))==(eco,name,version)\
+    \ and entry.get('expires',0)>time.time():return True\n    try:return datetime.fromisoformat(published.replace('Z','+00:00')).timestamp()<=time.time()-p.get('minimum_age_days',5)*86400\n\
+    \    except (AttributeError,ValueError,TypeError):return False\ndef upstream_client():\n\
+    \    return httpx.AsyncClient(timeout=45,proxy=os.getenv('UPSTREAM_PROXY') or\
+    \ None,follow_redirects=False,trust_env=False)\n\ndef validate_upstream(url):\n\
+    \    parsed=urlsplit(url)\n    if parsed.scheme!='https' or parsed.hostname not\
+    \ in HOSTS or parsed.username or parsed.password:raise HTTPException(403,'Upstream\
+    \ is not a package host')\nasync def fetch(url,maximum=16_000_000):\n    validate_upstream(url)\n\
+    \    async with upstream_client() as client:\n        async with client.stream('GET',url,headers={'User-Agent':'SandboxLab-package-gateway/1.0'})\
+    \ as r:\n            if r.status_code!=200:raise HTTPException(502,'Package registry\
+    \ could not supply this resource')\n            data=bytearray()\n           \
+    \ async for part in r.aiter_bytes():\n                data.extend(part)\n    \
+    \            if len(data)>maximum:raise HTTPException(413,'Package resource exceeds\
+    \ the lab size limit')\n    return bytes(data)\nasync def metadata(url):\n   \
+    \ value=memo.get(url)\n    if value and value[0]>time.time():return value[1]\n\
+    \    # Full npm packuments include release timestamps needed by the age policy.\n\
+    \    # Large established packages exceed 16 MB; do not retain these in RAM.\n\
+    \    raw=await fetch(url,64_000_000 if urlsplit(url).hostname=='registry.npmjs.org'\
+    \ else 16_000_000)\n    data=json.loads(raw)\n    if len(raw)<=1_000_000:\n  \
+    \      if len(memo)>=32:memo.pop(next(iter(memo)))\n        memo[url]=(time.time()+300,data)\n\
+    \    return data\ndef register(url,digest,eco,name,version,published,algorithm='sha256'):\n\
+    \    global catalog_revision\n    ident=hashlib.sha256((url+'|'+digest).encode()).hexdigest()\n\
+    \    entry={'url':url,'digest':digest,'algorithm':algorithm,'eco':eco,'name':name,'version':version,'published':published}\n\
+    \    if downloads.get(ident)!=entry:\n        downloads[ident]=entry;catalog_revision+=1\n\
+    \    return BASE+'/artifact/'+ident\n@app.middleware('http')\nasync def readonly(request,call_next):\n\
+    \    if request.method not in ['GET','HEAD'] or request.url.query or request.headers.get('authorization')\
+    \ or request.headers.get('cookie'):\n        return Response('Only approved package\
+    \ reads are permitted',status_code=403)\n    response=await call_next(request);save_catalog();response.headers['X-Content-Type-Options']='nosniff';return\
+    \ response\n@app.get('/healthz')\nasync def health():return {'ready':True,'minimum_age_days':policy().get('minimum_age_days',5)}\n\
+    # Bound disk reservations as well as RAM; concurrent downloads never exceed the\
+    \ cache budget.\nCACHE_BYTES=700_000_000\nartifact_locks={}\npins={}\nreserved_bytes=0\n\
+    cache_lock=asyncio.Lock()\ndownload_slots=asyncio.Semaphore(2)\n\n@asynccontextmanager\n\
+    async def artifact_lock(ident):\n    record=artifact_locks.setdefault(ident,[asyncio.Lock(),0])\n\
+    \    record[1]+=1\n    try:\n        async with record[0]:yield\n    finally:\n\
+    \        record[1]-=1\n        if not record[1]:artifact_locks.pop(ident,None)\n\
+    \n\ndef reserve_space(amount):\n    global reserved_bytes\n    files=sorted((p\
+    \ for p in CACHE.iterdir() if p.is_file() and re.fullmatch('[a-f0-9]{64}',p.name)),key=lambda\
+    \ p:p.stat().st_mtime)\n    size=sum(p.stat().st_size for p in files)\n    for\
+    \ old in files:\n        if size+reserved_bytes+amount<=CACHE_BYTES:break\n  \
+    \      if pins.get(old.name,0):continue\n        size-=old.stat().st_size;old.unlink()\n\
+    \    if size+reserved_bytes+amount>CACHE_BYTES:\n        raise HTTPException(503,'Package\
+    \ cache is busy serving downloads. Retry shortly.',headers={'Retry-After':'5'})\n\
+    \    reserved_bytes+=amount\n\n\ndef release_pin(ident):\n    if pins.get(ident,0)<=1:pins.pop(ident,None)\n\
+    \    else:pins[ident]-=1\n\n\nclass PinnedFileResponse(FileResponse):\n    def\
+    \ __init__(self,path,ident):\n        super().__init__(path,media_type='application/octet-stream')\n\
+    \        self.ident=ident\n\n    async def __call__(self,scope,receive,send):\n\
+    \        try:\n            # Completion means bytes have been read, not merely\
+    \ a sendfile path handed off.\n            scope={**scope,'extensions':{k:v for\
+    \ k,v in scope.get('extensions',{}).items() if k!='http.response.pathsend'}}\n\
+    \            await super().__call__(scope,receive,send)\n        finally:\n  \
+    \          release_pin(self.ident)\n\n\nasync def download_artifact(entry,destination):\n\
+    \    validate_upstream(entry['url'])\n    digest=hashlib.new(entry['algorithm']);size=0\n\
+    \    try:\n        async with upstream_client() as client:\n            async\
+    \ with client.stream('GET',entry['url'],headers={'User-Agent':'SandboxLab-package-gateway/1.0'})\
+    \ as response:\n                if response.status_code!=200:raise HTTPException(502,'Package\
+    \ registry could not supply this resource')\n                async with await\
+    \ anyio.open_file(destination,'wb') as output:\n                    async for\
+    \ chunk in response.aiter_bytes(chunk_size=65536):\n                        size+=len(chunk)\n\
+    \                        if size>MAX_BYTES:raise HTTPException(413,'Package resource\
+    \ exceeds the lab size limit')\n                        digest.update(chunk)\n\
+    \                        await output.write(chunk)\n                    await\
+    \ output.flush()\n        expected=entry['digest'];actual=digest.digest()\n  \
+    \      if expected and actual.hex()!=expected and base64.b64encode(actual).decode()!=expected:\n\
+    \            raise HTTPException(502,'Package checksum mismatch')\n    except\
+    \ httpx.HTTPError:\n        raise HTTPException(502,'Package download interrupted;\
+    \ retry the package installation.') from None\n\n\n@app.get('/artifact/{ident}')\n\
+    async def artifact(ident):\n    global reserved_bytes\n    entry=downloads.get(ident)\n\
+    \    if not entry:raise HTTPException(404,'Resolve the package metadata again\
+    \ before downloading')\n    allowed(entry['eco'],entry['name'])\n    async with\
+    \ artifact_lock(ident):\n        if not old_enough(entry['eco'],entry['name'],entry['version'],entry['published']):raise\
+    \ HTTPException(403,'Package release is younger than the minimum age')\n     \
+    \   CACHE.mkdir(parents=True,exist_ok=True);path=CACHE/ident\n        async with\
+    \ cache_lock:\n            if path.exists():\n                pins[ident]=pins.get(ident,0)+1;path.touch()\n\
+    \                return PinnedFileResponse(path,ident)\n        async with download_slots:\n\
+    \            temporary=None;reserved=False\n            try:\n               \
+    \ async with cache_lock:\n                    reserve_space(MAX_BYTES);reserved=True\n\
+    \                fd,name=tempfile.mkstemp(prefix='.download-',dir=CACHE);os.close(fd);temporary=Path(name)\n\
+    \                await download_artifact(entry,temporary)\n                async\
+    \ with cache_lock:\n                    temporary.replace(path)  # Only complete,\
+    \ verified files become visible.\n                    reserved_bytes-=MAX_BYTES;reserved=False\n\
+    \                    pins[ident]=pins.get(ident,0)+1\n                return PinnedFileResponse(path,ident)\n\
+    \            except OSError:\n                raise HTTPException(503,'Package\
+    \ cache storage is unavailable; retry after capacity is restored.') from None\n\
+    \            finally:\n                if temporary is not None:temporary.unlink(missing_ok=True)\n\
+    \                if reserved:reserved_bytes-=MAX_BYTES\n\n@app.get('/python/simple/{name}/')\n\
+    async def python_simple(name):\n    if not re.fullmatch('[A-Za-z0-9_.-]{1,120}',name):raise\
+    \ HTTPException(400)\n    name=re.sub('[-_.]+','-',name).lower();allowed('python',name)\n\
+    \    data=await metadata('https://pypi.org/pypi/'+name+'/json');links=[]\n   \
+    \ # Dependencies are catalogued for diagnostics, not used as an access allowlist.\n\
+    \    deps=[re.match(r'[A-Za-z0-9_.-]+',s).group(0) for s in data.get('info',{}).get('requires_dist')\
+    \ or [] if re.match(r'[A-Za-z0-9_.-]+',s)]\n    admit('python',[re.sub('[-_.]+','-',s).lower()\
+    \ for s in deps])\n    for version,files in data.get('releases',{}).items():\n\
+    \        for f in files:\n            published=f.get('upload_time_iso_8601')\n\
+    \            if f.get('yanked') or not old_enough('python',name,version,published):continue\n\
+    \            if urlsplit(f['url']).hostname!='files.pythonhosted.org':continue\n\
+    \            digest=f.get('digests',{}).get('sha256')\n            if not digest:continue\n\
+    \            url=register(f['url'],digest,'python',name,version,published)+'/'+quote(f['filename'])\n\
+    \            links.append('<a href=\"'+html.escape(url)+'#sha256='+digest+'\"\
+    \ data-upload-time=\"'+html.escape(published)+'\" data-requires-python=\"'+html.escape(f.get('requires_python')\
+    \ or '')+'\">'+html.escape(f['filename'])+'</a>')\n    return Response('<!doctype\
+    \ html><html><body>'+'\\n'.join(links)+'</body></html>',media_type='text/html')\n\
+    @app.get('/artifact/{ident}/{filename}')\nasync def named_artifact(ident,filename):return\
+    \ await artifact(ident)\nasync def npm_data(name):\n    if not re.fullmatch(r'(?:@[a-z0-9_.-]+/)?[a-z0-9_.-]{1,160}',name):raise\
+    \ HTTPException(400)\n    allowed('npm',name);data=await metadata('https://registry.npmjs.org/'+quote(name,safe='@'))\n\
+    \    result={k:v for k,v in data.items() if k not in ['versions','dist-tags','time','readme','users']};versions={}\n\
+    \    for version,original in data.get('versions',{}).items():\n        published=data.get('time',{}).get(version)\n\
+    \        if not old_enough('npm',name,version,published):continue\n        item=json.loads(json.dumps(original));dist=item.get('dist',{});url=dist.get('tarball','')\n\
+    \        if urlsplit(url).hostname!='registry.npmjs.org':continue\n        integrity=dist.get('integrity','');algorithm='sha256';digest=''\n\
+    \        if integrity.startswith('sha512-'):algorithm='sha512';digest=integrity.split('sha512-',1)[1].split()[0]\n\
+    \        elif dist.get('shasum'):algorithm='sha1';digest=dist['shasum']\n    \
+    \    if not digest:continue\n        dist['tarball']=register(url,digest,'npm',name,version,published,algorithm)\n\
+    \        versions[version]=item\n        admit('npm',set(item.get('dependencies',{}))|set(item.get('optionalDependencies',{}))|set(item.get('peerDependencies',{})))\n\
+    \    result['versions']=versions;result['dist-tags']={k:v for k,v in data.get('dist-tags',{}).items()\
+    \ if v in versions}\n    # npm install <name> should select the newest eligible\
+    \ stable release.\n    if 'latest' not in result['dist-tags']:\n        stable=[v\
+    \ for v in versions if re.fullmatch(r'[0-9]+\\.[0-9]+\\.[0-9]+',v)]\n        if\
+    \ stable:result['dist-tags']['latest']=max(stable,key=lambda v:tuple(int(x) for\
+    \ x in v.split('.')))\n    result['time']={v:data['time'][v] for v in versions};return\
+    \ result\n@app.get('/npm/{name:path}')\nasync def npm(name):return await npm_data(name)\n\
+    \nasync def crate_versions(name):\n    allowed('cargo',name);data=await metadata('https://crates.io/api/v1/crates/'+quote(name))\n\
+    \    return {v['num']:v for v in data.get('versions',[]) if not v.get('yanked')\
+    \ and old_enough('cargo',name,v['num'],v.get('created_at'))}\n@app.get('/cargo/index/config.json')\n\
+    async def cargo_config():return {'dl':BASE+'/cargo/crates','api':BASE+'/disabled'}\n\
+    @app.get('/cargo/index/{path:path}')\nasync def cargo_index(path):\n    name=path.rsplit('/',1)[-1]\n\
+    \    if not re.fullmatch('[a-zA-Z0-9_-]{1,100}',name):raise HTTPException(400)\n\
+    \    versions=await crate_versions(name)\n    canonical=(('1/'+name) if len(name)==1\
+    \ else ('2/'+name) if len(name)==2 else ('3/'+name[0]+'/'+name) if len(name)==3\
+    \ else name[:2]+'/'+name[2:4]+'/'+name)\n    if path!=canonical:raise HTTPException(400)\n\
+    \    raw=await fetch('https://index.crates.io/'+path);result=[]\n    for line\
+    \ in raw.decode().splitlines():\n        item=json.loads(line)\n        if item['vers']\
+    \ in versions:\n            result.append(line);admit('cargo',[d.get('package')\
+    \ or d['name'] for d in item.get('deps',[])])\n    return Response('\\n'.join(result)+'\\\
+    n',media_type='text/plain')\n@app.get('/cargo/crates/{name}/{version}/download')\n\
+    async def crate_download(name,version):\n    versions=await crate_versions(name);item=versions.get(version)\n\
+    \    if not item:raise HTTPException(403,'Crate is too recent or not approved')\n\
+    \    url=register('https://static.crates.io/crates/'+name+'/'+name+'-'+version+'.crate',item['checksum'],'cargo',name,version,item['created_at'])\n\
+    \    return await artifact(url.rsplit('/',1)[-1])\n\nasync def nuget_versions(name):\n\
+    \    if not re.fullmatch('[a-z0-9_.-]{1,120}',name):raise HTTPException(400)\n\
+    \    allowed('nuget',name);data=await metadata('https://api.nuget.org/v3/registration5-gz-semver2/'+name+'/index.json');items=[]\n\
+    \    for page in data.get('items',[]):\n        if 'items' not in page:\n    \
+    \        url=page.get('@id','')\n            if not url.startswith('https://api.nuget.org/v3/registration5-gz-semver2/'+name+'/'):continue\n\
+    \            page=await metadata(url)\n        for leaf in page.get('items',[]):\n\
+    \            item=leaf.get('catalogEntry',{})\n            if isinstance(item,dict)\
+    \ and item.get('listed',True) and old_enough('nuget',name,item.get('version','').lower(),item.get('published')):items.append(item)\n\
+    \    for item in items:\n        admit('nuget',[d['id'].lower() for g in item.get('dependencyGroups',[])\
+    \ for d in g.get('dependencies',[])])\n    return {i['version'].lower():i for\
+    \ i in items}\n@app.get('/nuget/v3/index.json')\nasync def nuget_index():\n  \
+    \  return {'version':'3.0.0','resources':[{'@id':BASE+'/nuget/flat/','@type':'PackageBaseAddress/3.0.0'},{'@id':BASE+'/nuget/registration/','@type':'RegistrationsBaseUrl/3.6.0'}]}\n\
+    @app.get('/nuget/flat/{name}/index.json')\nasync def nuget_list(name):return {'versions':list(await\
+    \ nuget_versions(name))}\n@app.get('/nuget/registration/{name}/index.json')\n\
+    async def nuget_registration(name):\n    items=await nuget_versions(name);leaves=[{'catalogEntry':item,'packageContent':BASE+f'/nuget/flat/{name}/{v}/{name}.{v}.nupkg'}\
+    \ for v,item in items.items()]\n    return {'count':1,'items':[{'count':len(leaves),'items':leaves}]}\n\
+    @app.get('/nuget/flat/{name}/{version}/{filename}')\nasync def nuget_package(name,version,filename):\n\
+    \    item=(await nuget_versions(name)).get(version)\n    if not item or filename!=f'{name}.{version}.nupkg':raise\
+    \ HTTPException(403,'Package version is too recent or not approved')\n    url=f'https://api.nuget.org/v3-flatcontainer/{name}/{version}/{filename}'\n\
+    \    catalog_url=item.get('@id','')\n    if not catalog_url.startswith('https://api.nuget.org/v3/catalog0/data/')\
+    \ or not catalog_url.endswith('/'+name+'.'+version+'.json'):raise HTTPException(502,'Missing\
+    \ authoritative NuGet catalog entry')\n    catalog=await metadata(catalog_url)\n\
+    \    digest=catalog.get('packageHash','')\n    if catalog.get('packageHashAlgorithm','').upper()!='SHA512'\
+    \ or not digest:raise HTTPException(502,'Missing NuGet package checksum')\n  \
+    \  ref=register(url,digest,'nuget',name,version,item['published'],'sha512')\n\
+    \    return await artifact(ref.rsplit('/',1)[-1])\n\ndef first_observed(ecosystem,name,version):\n\
+    \    # Go .info.Time is a commit timestamp, not proof of publication age.\n  \
+    \  # Quarantine from our first observation instead of trusting backdated commits.\n\
+    \    CACHE.mkdir(parents=True,exist_ok=True);path=CACHE/(ecosystem+'-first-seen.json')\n\
+    \    state=json.loads(path.read_text()) if path.exists() else {}\n    key=name+'@'+version\n\
+    \    if key not in state:\n        if len(state)>=5000:raise HTTPException(503,'Quarantine\
+    \ catalog is full; ask the operator to review it')\n        state[key]=datetime.now(timezone.utc).isoformat();path.write_text(json.dumps(state))\n\
+    \    return state[key]\n@app.get('/go/{module:path}/@v/{filename}')\nasync def\
+    \ go_resource(module,filename):\n    if not re.fullmatch('[a-zA-Z0-9!._~/-]{1,240}',module)\
+    \ or '..' in module:raise HTTPException(400)\n    allowed('go',module)\n    prefix='https://proxy.golang.org/'+module+'/@v/'\n\
+    \    if filename=='list':\n        raw=(await fetch(prefix+'list',1_000_000)).decode().splitlines()\n\
+    \        return Response('\\n'.join(v for v in raw if old_enough('go',module,v,first_observed('go',module,v))),media_type='text/plain')\n\
+    \    match=re.fullmatch(r'(v[0-9A-Za-z.+_-]{1,100})\\.(info|mod|zip)',filename)\n\
+    \    if not match:raise HTTPException(400)\n    version,kind=match.groups();published=first_observed('go',module,version)\n\
+    \    if not old_enough('go',module,version,published):raise HTTPException(403,'Go\
+    \ version is quarantined for five days from first observation; an explicit version\
+    \ override can release it')\n    if kind=='zip':\n        ref=register(prefix+filename,'','go',module,version,published)\n\
+    \        return await artifact(ref.rsplit('/',1)[-1])\n    raw=await fetch(prefix+filename,1_000_000)\n\
+    \    if kind=='mod':\n        names=re.findall(r'^\\s*(?:require\\s+)?([a-zA-Z0-9!._~/-]+)\\\
+    s+v[0-9]',raw.decode(),re.M);admit('go',names)\n    return Response(raw,media_type='application/json'\
+    \ if kind=='info' else 'text/plain')\n@app.get('/go/sumdb/sum.golang.org/{path:path}')\n\
+    async def go_sumdb(path):\n    if path=='supported':return Response('')\n    if\
+    \ path.startswith('lookup/'):\n        name,sep,version=path.removeprefix('lookup/').rpartition('@');allowed('go',name)\n\
+    \        if not sep or not re.fullmatch('v[0-9A-Za-z.+_-]{1,100}',version):raise\
+    \ HTTPException(400)\n        if not old_enough('go',name,version,first_observed('go',name,version)):raise\
+    \ HTTPException(403,'Go checksum lookup is quarantined with its module version')\n\
+    \    elif not re.fullmatch(r'tile/[0-9/px.]{1,100}',path):raise HTTPException(403)\n\
+    \    return Response(await fetch('https://sum.golang.org/'+path,2_000_000),media_type='text/plain')\n\
+    @app.get('/julia/{path:path}')\nasync def julia(path):\n    if path=='registries':\n\
+    \        # Stable conservative-registry discovery is the only upstream list request.\n\
+    \        raw=(await fetch('https://us-east.pkg.julialang.org/registries.conservative',50000)).decode()\n\
+    \        registry=[]\n        for line in raw.splitlines():\n            if re.fullmatch(r'/registry/[a-f0-9-]{36}/[a-f0-9]{40}',line):\n\
+    \                name,version=line.lstrip('/').rsplit('/',1);admit('julia',[name])\n\
+    \                first_observed('julia',name,version)\n        # Retain aged snapshots\
+    \ even when today's upstream registry hash changes.\n        known=json.loads((CACHE/'julia-first-seen.json').read_text())\n\
+    \        selected={}\n        for key,published in sorted(known.items(),key=lambda\
+    \ item:item[1]):\n            name,version=key.rsplit('@',1)\n            if name.startswith('registry/')\
+    \ and old_enough('julia',name,version,published):selected[name]=version\n    \
+    \    registry=['/'+name+'/'+version for name,version in selected.items()]\n  \
+    \      if not registry:raise HTTPException(403,'Julia registry snapshots are quarantined\
+    \ for five days from first observation; use a reviewed snapshot override to initialize\
+    \ sooner')\n        return Response('\\n'.join(registry),media_type='text/plain')\n\
+    \    if not re.fullmatch(r'(?:registry|package)/[a-f0-9-]{36}/[a-f0-9]{40}|artifact/[a-f0-9]{40,64}',path):raise\
+    \ HTTPException(403)\n    name,version=path.rsplit('/',1)\n    # Julia content\
+    \ identifiers are immutable; no arbitrary host/path is accepted.\n    published=first_observed('julia',name,version)\n\
+    \    if not old_enough('julia',name,version,published):raise HTTPException(403,'Julia\
+    \ content is quarantined for five days from first observation')\n    admit('julia',[name]);ref=register('https://storage.julialang.net/'+path,'','julia',name,version,published)\n\
+    \    return await artifact(ref.rsplit('/',1)[-1])\n"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: package-policy
+  namespace: lab-control
+data:
+  packages.json: "{\n  \"minimum_age_days\": 5,\n  \"overrides\": [],\n  \"package_access\"\
+    : \"all-valid-registry-packages\"\n}\n"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: package-cache
+  namespace: lab-control
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: package-proxy
+  namespace: lab-control
+spec:
+  selector:
+    app: package-proxy
+  ports:
+  - port: 3128
+    targetPort: 3128
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: package-proxy
+  namespace: lab-control
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: package-proxy
+  template:
+    metadata:
+      labels:
+        app: package-proxy
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+      containers:
+      - name: package-proxy
+        image: sandbox-lab/packages:local
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        command:
+        - uvicorn
+        - package_gateway:app
+        - --app-dir
+        - /app
+        - --host
+        - 0.0.0.0
+        - --port
+        - '3128'
+        - --no-access-log
+        volumeMounts:
+        - name: code
+          mountPath: /app
+          readOnly: true
+        - name: policy
+          mountPath: /policy
+          readOnly: true
+        - name: cache
+          mountPath: /cache
+        ports:
+        - containerPort: 3128
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 3128
+          periodSeconds: 3
+          timeoutSeconds: 5
+        env:
+        - name: UPSTREAM_PROXY
+          value: http://package-proxy-egress.lab-control.svc.cluster.local:3129
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 3128
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 36
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 3128
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+      volumes:
+      - name: code
+        configMap:
+          name: package-code
+      - name: policy
+        configMap:
+          name: package-policy
+      - name: cache
+        persistentVolumeClaim:
+          claimName: package-cache
+  strategy:
+    type: Recreate
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sandbox-dns
+  namespace: lab-control
+data:
+  Corefile: "cluster.local:1053 {\n  health :8080\n  ready :8181\n  forward . 10.96.0.10\n\
+    \  cache 30\n}\n.:1053 {\n  template IN ANY {\n    rcode REFUSED\n  }\n}\n"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-dns
+  namespace: lab-control
+spec:
+  selector:
+    app: sandbox-dns
+  ports:
+  - name: udp
+    port: 53
+    targetPort: 1053
+    protocol: UDP
+  - name: tcp
+    port: 53
+    targetPort: 1053
+    protocol: TCP
+  clusterIP: 10.96.0.53
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox-dns
+  namespace: lab-control
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sandbox-dns
+  template:
+    metadata:
+      labels:
+        app: sandbox-dns
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+      containers:
+      - name: sandbox-dns
+        image: registry.k8s.io/coredns/coredns:v1.13.1
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - NET_BIND_SERVICE
+          readOnlyRootFilesystem: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        command:
+        - /coredns
+        - -conf
+        - /etc/coredns/Corefile
+        volumeMounts:
+        - name: config
+          mountPath: /etc/coredns
+          readOnly: true
+        ports:
+        - containerPort: 1053
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8181
+          periodSeconds: 5
+          timeoutSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          periodSeconds: 10
+          failureThreshold: 6
+          timeoutSeconds: 5
+        startupProbe:
+          httpGet:
+            path: /ready
+            port: 8181
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 36
+      volumes:
+      - name: config
+        configMap:
+          name: sandbox-dns
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-dns
+  namespace: lab-control
+spec:
+  podSelector:
+    matchLabels:
+      app: sandbox-dns
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-dev
+      podSelector:
+        matchLabels: {}
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-agents
+      podSelector:
+        matchLabels: {}
+    ports:
+    - protocol: UDP
+      port: 1053
+    - protocol: TCP
+      port: 1053
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres
+  namespace: coder
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: coder
+spec:
+  selector:
+    app: postgres
+  ports:
+  - port: 5432
+    targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: coder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+      containers:
+      - name: postgres
+        image: postgres:16.10-bookworm
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        env:
+        - name: POSTGRES_USER
+          value: coder
+        - name: POSTGRES_DB
+          value: coder
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database
+              key: password
+        - name: PGDATA
+          value: /data/pgdata
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: tmp
+          mountPath: /tmp
+        - name: run
+          mountPath: /var/run/postgresql
+        ports:
+        - containerPort: 5432
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - coder
+            - -d
+            - coder
+          periodSeconds: 5
+          timeoutSeconds: 5
+        startupProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - coder
+            - -d
+            - coder
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 36
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - kill -0 1
+          timeoutSeconds: 5
+          periodSeconds: 10
+          failureThreshold: 6
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: postgres
+      - name: tmp
+        emptyDir: {}
+      - name: run
+        emptyDir: {}
+  strategy:
+    type: Recreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coder
+  namespace: coder
+spec:
+  selector:
+    app: coder
+  ports:
+  - port: 7080
+    targetPort: 7080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coder
+  namespace: coder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: coder
+  template:
+    metadata:
+      labels:
+        app: coder
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: true
+      containers:
+      - name: coder
+        image: ghcr.io/coder/coder:v2.36.4
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: '2'
+            memory: 1Gi
+        command:
+        - /opt/coder
+        - server
+        env:
+        - name: CODER_PG_CONNECTION_URL
+          valueFrom:
+            secretKeyRef:
+              name: database
+              key: url
+        - name: CODER_ACCESS_URL
+          value: http://coder.coder.svc.cluster.local:7080
+        - name: CODER_HTTP_ADDRESS
+          value: 0.0.0.0:7080
+        - name: CODER_WILDCARD_ACCESS_URL
+          value: ''
+        - name: CODER_TELEMETRY_ENABLE
+          value: 'false'
+        - name: CODER_UPDATE_CHECK
+          value: 'false'
+        - name: CODER_OAUTH2_GITHUB_DEFAULT_PROVIDER_ENABLE
+          value: 'false'
+        - name: CODER_DERP_SERVER_STUN_ADDRESSES
+          value: disable
+        - name: CODER_DERP_FORCE_WEBSOCKETS
+          value: 'true'
+        volumeMounts:
+        - name: home
+          mountPath: /home/coder
+        - name: tmp
+          mountPath: /tmp
+        ports:
+        - containerPort: 7080
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 7080
+          periodSeconds: 5
+          timeoutSeconds: 5
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 7080
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 36
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 7080
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+      serviceAccountName: coder
+      volumes:
+      - name: home
+        emptyDir:
+          sizeLimit: 2Gi
+      - name: tmp
+        emptyDir:
+          sizeLimit: 1Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coder
+  namespace: coder-ai
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres
+  namespace: coder-ai
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: coder-ai
+spec:
+  selector:
+    app: postgres
+  ports:
+  - port: 5432
+    targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: coder-ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+      containers:
+      - name: postgres
+        image: postgres:16.10-bookworm
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        env:
+        - name: POSTGRES_USER
+          value: coder
+        - name: POSTGRES_DB
+          value: coder
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database
+              key: password
+        - name: PGDATA
+          value: /data/pgdata
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: tmp
+          mountPath: /tmp
+        - name: run
+          mountPath: /var/run/postgresql
+        ports:
+        - containerPort: 5432
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - coder
+            - -d
+            - coder
+          periodSeconds: 5
+          timeoutSeconds: 5
+        startupProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - coder
+            - -d
+            - coder
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 36
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - kill -0 1
+          timeoutSeconds: 5
+          periodSeconds: 10
+          failureThreshold: 6
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: postgres
+      - name: tmp
+        emptyDir: {}
+      - name: run
+        emptyDir: {}
+  strategy:
+    type: Recreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coder
+  namespace: coder-ai
+spec:
+  selector:
+    app: coder
+  ports:
+  - port: 7080
+    targetPort: 7080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coder
+  namespace: coder-ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: coder
+  template:
+    metadata:
+      labels:
+        app: coder
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: true
+      containers:
+      - name: coder
+        image: ghcr.io/coder/coder:v2.36.4
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: '2'
+            memory: 1Gi
+        command:
+        - /opt/coder
+        - server
+        env:
+        - name: CODER_PG_CONNECTION_URL
+          valueFrom:
+            secretKeyRef:
+              name: database
+              key: url
+        - name: CODER_ACCESS_URL
+          value: http://coder.coder-ai.svc.cluster.local:7080
+        - name: CODER_HTTP_ADDRESS
+          value: 0.0.0.0:7080
+        - name: CODER_WILDCARD_ACCESS_URL
+          value: ''
+        - name: CODER_TELEMETRY_ENABLE
+          value: 'false'
+        - name: CODER_UPDATE_CHECK
+          value: 'false'
+        - name: CODER_OAUTH2_GITHUB_DEFAULT_PROVIDER_ENABLE
+          value: 'false'
+        - name: CODER_DERP_SERVER_STUN_ADDRESSES
+          value: disable
+        - name: CODER_DERP_FORCE_WEBSOCKETS
+          value: 'true'
+        volumeMounts:
+        - name: home
+          mountPath: /home/coder
+        - name: tmp
+          mountPath: /tmp
+        ports:
+        - containerPort: 7080
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 7080
+          periodSeconds: 5
+          timeoutSeconds: 5
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 7080
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 36
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 7080
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+      serviceAccountName: coder
+      volumes:
+      - name: home
+        emptyDir:
+          sizeLimit: 2Gi
+      - name: tmp
+        emptyDir:
+          sizeLimit: 1Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: coder
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+  namespace: coder
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: coder
+      podSelector:
+        matchLabels:
+          app: coder
+    ports:
+    - protocol: TCP
+      port: 5432
+  egress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: coder
+  namespace: coder
+spec:
+  podSelector:
+    matchLabels:
+      app: coder
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-dev
+      podSelector:
+        matchLabels: {}
+    ports:
+    - protocol: TCP
+      port: 7080
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: coder
+      podSelector:
+        matchLabels:
+          app: postgres
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - ipBlock:
+        cidr: 172.19.0.2/32
+    ports:
+    - protocol: TCP
+      port: 6443
+  - to:
+    - ipBlock:
+        cidr: 10.96.0.1/32
+    ports:
+    - protocol: TCP
+      port: 443
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 127.0.0.0/8
+        - 169.254.0.0/16
+        - 100.64.0.0/10
+        - 0.0.0.0/8
+        - 224.0.0.0/4
+        - 240.0.0.0/4
+    ports:
+    - protocol: TCP
+      port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: coder-ai
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+  namespace: coder-ai
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: coder-ai
+      podSelector:
+        matchLabels:
+          app: coder
+    ports:
+    - protocol: TCP
+      port: 5432
+  egress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: coder
+  namespace: coder-ai
+spec:
+  podSelector:
+    matchLabels:
+      app: coder
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-agents
+      podSelector:
+        matchLabels: {}
+    ports:
+    - protocol: TCP
+      port: 7080
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: coder-ai
+      podSelector:
+        matchLabels:
+          app: postgres
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - ipBlock:
+        cidr: 172.19.0.2/32
+    ports:
+    - protocol: TCP
+      port: 6443
+  - to:
+    - ipBlock:
+        cidr: 10.96.0.1/32
+    ports:
+    - protocol: TCP
+      port: 443
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 127.0.0.0/8
+        - 169.254.0.0/16
+        - 100.64.0.0/10
+        - 0.0.0.0/8
+        - 224.0.0.0/4
+        - 240.0.0.0/4
+    ports:
+    - protocol: TCP
+      port: 443
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-gateway-egress
+  namespace: lab-control
+data:
+  squid.conf: 'http_port 3129
+
+    pid_filename /tmp/squid.pid
+
+    access_log none
+
+    cache_log /dev/null
+
+    cache_store_log none
+
+    cache deny all
+
+    acl connect method CONNECT
+
+    acl tls port 443
+
+    acl approved dstdomain -n openrouter.ai
+
+    acl private_dst dst 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/16
+    100.64.0.0/10 0.0.0.0/8 224.0.0.0/4 240.0.0.0/4
+
+    http_access deny private_dst
+
+    http_access allow connect tls approved
+
+    http_access deny all
+
+    shutdown_lifetime 1 seconds
+
+    '
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: model-gateway-egress
+  namespace: lab-control
+spec:
+  selector:
+    app: model-gateway-egress
+  ports:
+  - port: 3129
+    targetPort: 3129
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-gateway-egress
+  namespace: lab-control
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: model-gateway-egress
+  template:
+    metadata:
+      labels:
+        app: model-gateway-egress
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+      containers:
+      - name: model-gateway-egress
+        image: sandbox-lab/egress:local
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        command:
+        - squid
+        - -N
+        - -f
+        - /etc/squid/squid.conf
+        volumeMounts:
+        - name: config
+          mountPath: /etc/squid
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        ports:
+        - containerPort: 3129
+        readinessProbe:
+          tcpSocket:
+            port: 3129
+          periodSeconds: 5
+          timeoutSeconds: 5
+        startupProbe:
+          tcpSocket:
+            port: 3129
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 36
+        livenessProbe:
+          tcpSocket:
+            port: 3129
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+      volumes:
+      - name: config
+        configMap:
+          name: model-gateway-egress
+      - name: tmp
+        emptyDir:
+          sizeLimit: 32Mi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: model-gateway-egress
+  namespace: lab-control
+spec:
+  podSelector:
+    matchLabels:
+      app: model-gateway-egress
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-control
+      podSelector:
+        matchLabels:
+          app: model-gateway
+    ports:
+    - protocol: TCP
+      port: 3129
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 127.0.0.0/8
+        - 169.254.0.0/16
+        - 100.64.0.0/10
+        - 0.0.0.0/8
+        - 224.0.0.0/4
+        - 240.0.0.0/4
+    ports:
+    - protocol: TCP
+      port: 443
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: package-proxy-egress
+  namespace: lab-control
+data:
+  squid.conf: 'http_port 3129
+
+    pid_filename /tmp/squid.pid
+
+    access_log none
+
+    cache_log /dev/null
+
+    cache_store_log none
+
+    cache deny all
+
+    acl connect method CONNECT
+
+    acl tls port 443
+
+    acl approved dstdomain -n pypi.org files.pythonhosted.org registry.npmjs.org index.crates.io
+    crates.io static.crates.io proxy.golang.org api.nuget.org sum.golang.org us-east.pkg.julialang.org
+    storage.julialang.net
+
+    acl private_dst dst 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/16
+    100.64.0.0/10 0.0.0.0/8 224.0.0.0/4 240.0.0.0/4
+
+    http_access deny private_dst
+
+    http_access allow connect tls approved
+
+    http_access deny all
+
+    shutdown_lifetime 1 seconds
+
+    '
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: package-proxy-egress
+  namespace: lab-control
+spec:
+  selector:
+    app: package-proxy-egress
+  ports:
+  - port: 3129
+    targetPort: 3129
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: package-proxy-egress
+  namespace: lab-control
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: package-proxy-egress
+  template:
+    metadata:
+      labels:
+        app: package-proxy-egress
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+      containers:
+      - name: package-proxy-egress
+        image: sandbox-lab/egress:local
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+        command:
+        - squid
+        - -N
+        - -f
+        - /etc/squid/squid.conf
+        volumeMounts:
+        - name: config
+          mountPath: /etc/squid
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        ports:
+        - containerPort: 3129
+        readinessProbe:
+          tcpSocket:
+            port: 3129
+          periodSeconds: 5
+          timeoutSeconds: 5
+        startupProbe:
+          tcpSocket:
+            port: 3129
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 36
+        livenessProbe:
+          tcpSocket:
+            port: 3129
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+      volumes:
+      - name: config
+        configMap:
+          name: package-proxy-egress
+      - name: tmp
+        emptyDir:
+          sizeLimit: 32Mi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: package-proxy-egress
+  namespace: lab-control
+spec:
+  podSelector:
+    matchLabels:
+      app: package-proxy-egress
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: lab-control
+      podSelector:
+        matchLabels:
+          app: package-proxy
+    ports:
+    - protocol: TCP
+      port: 3129
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 127.0.0.0/8
+        - 169.254.0.0/16
+        - 100.64.0.0/10
+        - 0.0.0.0/8
+        - 224.0.0.0/4
+        - 240.0.0.0/4
+    ports:
+    - protocol: TCP
+      port: 443

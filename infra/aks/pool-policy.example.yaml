@@ -1,0 +1,49 @@
+# DRAFT CONTRACT: requires a future lifecycle controller. Not read by the local
+# backend. No custom resource/operator is installed. Schedule values are examples.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: proposed-sandbox-pool-policy
+  namespace: lab-control
+data:
+  policy.yaml: |
+    timezone: America/New_York
+    quick:
+      namespace: lab-sandboxes
+      nodeSelector: {lab/pool: quick}
+      tolerations: [{key: lab/pool, operator: Equal, value: quick, effect: NoSchedule}]
+      image: REPLACE_ACR_IMAGE_WITH_DIGEST
+      maxActive: 256 # Illustrative load-test envelope, not a capacity estimate.
+      maxReady: 64
+      maxTotalPods: 320
+      idleReserve: 0
+      idleSeconds: 180
+      scaleDownStabilizationSeconds: 180
+      allocationStrategy: clean-single-use
+      protectActiveLeases: true
+      demand:
+        rateWindowSeconds: 30
+        refillPercentile: 95
+        burstAllowance: MEASURE_FROM_TRAFFIC
+      schedule:
+        - {days: [Mon, Tue, Wed, Thu, Fri], start: "05:30", end: "19:00", minReady: 8}
+        - {days: [Tue, Wed, Thu], start: "07:30", end: "18:00", minReady: 16}
+      # Overlap takes maximum; reactive demand can exceed scheduled floors.
+    projects:
+      namespace: lab-agents
+      codingAgent: ori-pi
+      idleSeconds: 600
+      preserveHomeOnStop: true
+      protectActiveJobsAndPreviews: true
+      maxConcurrentTurns: 64 # Example; resource profiles/quotas must match.
+    developers:
+      namespace: lab-dev
+      codingAgent: ori-pi
+      idleSeconds: 1800
+      preserveHomeOnStop: true
+      protectConnectedUsers: true
+    executionNodePools:
+      quick: {mode: User, minNodes: 0, maxNodes: REPLACE_VALIDATED_MAX}
+      projects: {mode: User, minNodes: 0, maxNodes: REPLACE_VALIDATED_MAX}
+      developers: {mode: User, minNodes: 0, maxNodes: REPLACE_VALIDATED_MAX}
+    # System and trusted services tiers remain available to wake these pools.

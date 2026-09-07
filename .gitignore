@@ -1,0 +1,75 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/.vinext/
+/out/
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# local environment
+.env*
+
+# deployment and generated files
+.vercel
+next-env.d.ts
+/dist/
+/.wrangler/
+/outputs/
+/work/
+/.local/
+/.local
+/.venv/
+/.venv
+/.runtime.nosync/
+__pycache__/
+.pytest_cache/
+!.env.example
+*.tsbuildinfo
+
+# Private lab state and generated local integrations
+/.openai/
+/docs/VERIFICATION.md
+*.vsix
+*.log
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.key
+*.p12
+*.pfx
+*.kubeconfig
+kubeconfig
+*-kubeconfig
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+!*.example.tfvars
+# Share only curated source/reference reports, never copied session exports
+/conversations/
+/artifacts/
+/checkpoints/
+/user-apps/
+/sessions/

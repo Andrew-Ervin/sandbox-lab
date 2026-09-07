@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import ts from 'typescript';
+const source=await readFile(new URL('../lib/package-policy.ts',import.meta.url),'utf8');
+const {outputText}=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}});
+const {parsePolicy}=await import('data:text/javascript;base64,'+Buffer.from(outputText).toString('base64'));
+assert.deepEqual(parsePolicy({minimum_age_days:5}),{minimum_age_days:5,overrides:[]});
+assert.deepEqual(parsePolicy({minimum_age_days:5,overrides:null}),{minimum_age_days:5,overrides:[]});
+assert.deepEqual(parsePolicy({minimum_age_days:5,packages:null,overrides:[null,{expires:'bad'}]}).overrides,[]);
+for(const value of [null,[],{},'unavailable',{minimum_age_days:-1}])assert.throws(()=>parsePolicy(value));
+const valid={ecosystem:'python',package:'sympy',version:'1.14.0',reason:'Approved for test',expires:1800000000};
+assert.deepEqual(parsePolicy({minimum_age_days:5,overrides:[valid,null]}).overrides,[valid]);
+console.log('Package-policy UI regression checks passed.');

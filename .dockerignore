@@ -1,0 +1,12 @@
+*
+!sandbox/
+!sandbox/**
+!.local/
+.local/*
+!.local/bin/
+.local/bin/*
+!.local/bin/ori-linux-arm64
+
+!.local/bin/ori-linux-amd64
+!.local/bin/code-server-linux-arm64.tar.gz
+!.local/bin/code-server-linux-amd64.tar.gz
