@@ -80,9 +80,10 @@ async def serve(runtime, record, ready=None):
                                 raw=base64.b64decode(request.get('body',''),validate=True)
                                 if len(raw)>16000:raise ValueError('Gallery query too large')
                                 response=await package_client.post(path,content=raw,headers={'content-type':'application/json'})
-                            elif request['method'] != 'GET' or request.get('body') or not re.match(r'^/(python/|npm/|cargo/|go/|nuget/|julia/|artifact/|vscode/assets/)',path):
+                            elif (request['method'] != 'GET' and not (request['method']=='HEAD' and re.fullmatch(r'/artifact/[a-f0-9]{64}(?:/[^/?]+)?',path))) or request.get('body') or not re.match(r'^/(python/|npm/|cargo/|go/|nuget/|julia/|artifact/|vscode/assets/)',path):
                                 raise ValueError('Package request denied')
-                            else:response = await package_client.get(path)
+                            else:response = await package_client.request(request['method'],path)
+                            if response.status_code>=400:runtime.telemetry.event('package',record['id'],'package_request_failed',error=f'Package gateway HTTP {response.status_code}')
                         elif request['service'] == 'model' and model_client:
                             if (request['method'],path) not in (('POST','/v1/chat/completions'),('POST','/v1/responses'),('POST','/v1/messages'),('GET','/v1/models')): raise ValueError('Model route denied')
                             raw = base64.b64decode(request['body'], validate=True)
@@ -109,7 +110,7 @@ async def serve(runtime, record, ready=None):
                             response = await model_client.post(path,json=body,headers={'Authorization':authorization})
                         else: raise ValueError('Service denied')
                         if len(response.content)>250_000_000: raise ValueError('Service response too large')
-                        await send({'type':'headers','status':response.status_code,'content_type':response.headers.get('content-type','application/octet-stream')})
+                        await send({'type':'headers','status':response.status_code,'content_type':response.headers.get('content-type','application/octet-stream'),'content_length':int(response.headers['content-length']) if response.headers.get('content-length','').isdigit() else None})
                         for offset in range(0,len(response.content),65536):
                             await send({'type':'body','data':base64.b64encode(response.content[offset:offset+65536]).decode()})
                         await send({'type':'end'})

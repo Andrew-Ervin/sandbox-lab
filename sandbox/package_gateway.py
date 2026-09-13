@@ -189,7 +189,7 @@ async def download_artifact(entry,destination):
         raise HTTPException(502,'Package download interrupted; retry the package installation.') from None
 
 
-@app.get('/artifact/{ident}')
+@app.api_route('/artifact/{ident}',methods=['GET','HEAD'])
 async def artifact(ident):
     global reserved_bytes
     entry=downloads.get(ident)
@@ -238,7 +238,7 @@ async def python_simple(name):
             url=register(f['url'],digest,'python',name,version,published)+'/'+quote(f['filename'])
             links.append('<a href="'+html.escape(url)+'#sha256='+digest+'" data-upload-time="'+html.escape(published)+'" data-requires-python="'+html.escape(f.get('requires_python') or '')+'">'+html.escape(f['filename'])+'</a>')
     return Response('<!doctype html><html><body>'+'\n'.join(links)+'</body></html>',media_type='text/html')
-@app.get('/artifact/{ident}/{filename}')
+@app.api_route('/artifact/{ident}/{filename}',methods=['GET','HEAD'])
 async def named_artifact(ident,filename):return await artifact(ident)
 async def npm_data(name):
     if not re.fullmatch(r'(?:@[a-z0-9_.-]+/)?[a-z0-9_.-]{1,160}',name):raise HTTPException(400)

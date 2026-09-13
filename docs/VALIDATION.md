@@ -51,3 +51,13 @@ A synthetic seven-day home archive was uploaded to private Blob, downloaded and 
 Final automated verification for this round passed 314 Python tests, the polling suite, TypeScript checking, production build and regenerated architecture report. The seven-day archival policy is enabled in private pilot configuration; no private configuration is included in source.
 
 The final browser pass rendered the Supply Chain optimizer, but Solve still failed: its Vite log reported connection refused on local port 8000 after Python package artifact downloads returned 503. This generated app backend remains an outstanding live validation failure; preview-origin regression tests alone do not establish app action readiness.
+
+## Profiling and package protocol follow-up
+
+320 Python tests, polling tests, TypeScript and the production build passed. The complete first/burst/sequential/live profiling results and cost assumptions are in [Performance profile](PERFORMANCE-PROFILE.md). All 32 original execution checks passed, plus six post-optimization quick checks whose cloud deletions completed. Quick results now return after checkpoint durability and before background deletion completes; reservations remain until confirmed cleanup.
+
+The optimizer failure recorded above was infrastructure-related: uv performs HEAD requests for wheel metadata, which the relay denied. Scoped artifact HEAD now returns verified content length without a body, with the existing age/checksum checks. Locked dependencies restored, the unchanged API command restarted, and the browser Solve action produced the shipment plan after refreshing its expired preview lease. No generated MILP solver or frontend code was modified.
+
+Operations now includes a five-minute background ARM inventory, provisioning state, sandbox group defaults/quotas, registry usage, storage settings, local checkpoint/upload limits, package cache, model call count and pending cleanup. The live inventory confirmed three sandbox groups, one Standard Hot LRS storage account, one Basic registry and one managed identity, with no Dynamic Sessions pool or dedicated environment. Cloud observation failures are explicit; cached data is timestamped.
+
+A matched 10 MiB archival test verified identical file hashes: native resume/read 3.464s, archive 20.151s, Blob rebuild/read 7.266s. The policy remains seven inactive days; recommendations are documented without raising the pilot capacity or budget limits.

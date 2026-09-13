@@ -77,6 +77,9 @@ def invoke(data):
     with contextlib.nullcontext(client(config, data['group'])) as group:
         action = data['action']
         args = data.get('args', {})
+        if action == 'service_inventory':
+            from azure_service_inventory import inventory
+            return inventory(config, _credential)
         if action.startswith('blob_'): return blob_invoke(config, action, args)
         if action == 'delete_snapshot':group.begin_delete_snapshot(args['snapshot_id'],polling_timeout=90).result();return {}
         if action == 'list':

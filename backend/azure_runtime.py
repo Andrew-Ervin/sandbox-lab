@@ -56,6 +56,8 @@ class AzureRuntime:
         self.resizing=set()
         from .azure_archive import AzureArchive
         self.archive=AzureArchive(self)
+        from .quick_cleanup import QuickCleanup
+        self.quick_cleanup=QuickCleanup(self)
 
     def configured(self):
         if any(not self.config.get(k) for k in ('subscription_id', 'resource_group', 'region')):
@@ -173,7 +175,7 @@ class AzureRuntime:
             live=await self.transport.call('list',group)
             if not record.get('sandbox_id') and len(live)>=profile['retained_limit']:
                 raise RuntimeError('Saved workspace quota reached; raise the Azure group quota without deleting user work.')
-            active=[r for r in self.records() if r['id']!=record['id'] and r['state'] in ('running','starting','failed') and r.get('charge')]
+            active=[r for r in self.records() if r['id']!=record['id'] and r['state'] in ('running','starting','failed','stopping','deleting') and r.get('charge')]
             remote_active=sum(v['id']!=record.get('sandbox_id') and v['state'] not in ('Stopped','Suspended') for v in live)
             if max(remote_active,sum(r['kind']==record['kind'] for r in active))>=profile['active_limit']:
                 raise CapacityBusy('Waiting for an available compute slot')
@@ -573,7 +575,9 @@ class AzureRuntime:
                 try:await self.refresh_bill();self.billing_error=None
                 except Exception:self.billing_error='Azure billing refresh is unavailable; local reservations remain in force.'
                 self.last_bill_check=time.time()
+            self.quick_cleanup.maintain()
             for record in self.records():
+                if record.get('cleanup_pending'):continue
                 if record['state'] in ('deleted','stopped'): continue
                 if record['kind']=='developer' and record['state']=='running' and not record.get('warm') and time.time()-record.get('activity_checked_at',0)>30:
                     try:
@@ -624,6 +628,7 @@ class AzureRuntime:
 
     async def close(self):
         await self.archive.close()
+        await self.quick_cleanup.close()
         for record in self.records():
             if record['state'] in ('deleted','stopped'):continue
             try:await self.stop(record['id'],delete=record.get('disposable',False))

@@ -7,6 +7,7 @@ import asyncio
 import base64
 import http
 import json
+import re
 from pathlib import Path
 import secrets
 import time
@@ -94,7 +95,7 @@ class Bridge:
                     if parsed.path=='/v1/messages' and all(k=='beta' and v==['true'] for k,v in query.items()):path=parsed.path
                     elif parsed.path=='/v1/models' and all(k=='client_version' and len(v)==1 and len(v[0])<40 for k,v in query.items()):path=parsed.path
                     if (method,path) not in (('POST','/v1/chat/completions'),('POST','/v1/responses'),('POST','/v1/messages'),('GET','/v1/models')):raise ValueError('Route denied')
-                elif method!='GET' and not gallery_query:raise ValueError('Method denied')
+                elif method!='GET' and not gallery_query and not (method=='HEAD' and re.fullmatch(r'/artifact/[a-f0-9]{64}(?:/[^/?]+)?',path)):raise ValueError('Method denied')
                 if not self.reverse: raise RuntimeError('Broker disconnected')
                 body = await reader.readexactly(length)
                 queue = asyncio.Queue(maxsize=8); self.pending[ident] = queue
@@ -105,14 +106,20 @@ class Bridge:
                 if first.get('type') != 'headers': raise RuntimeError('Service unavailable')
                 status = int(first['status']); content_type = first.get('content_type', 'application/octet-stream')
                 if '\r' in content_type or '\n' in content_type: raise ValueError('Invalid response')
-                writer.write(f'HTTP/1.1 {status} Response\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n'.encode())
+                if method=='HEAD':
+                    length=first.get('content_length')
+                    header=f'Content-Length: {length}\r\n' if isinstance(length,int) and 0<=length<=250_000_000 else ''
+                    writer.write(f'HTTP/1.1 {status} Response\r\nContent-Type: {content_type}\r\n{header}Connection: close\r\n\r\n'.encode())
+                else:writer.write(f'HTTP/1.1 {status} Response\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n'.encode())
                 while True:
                     part = await queue.get()
                     if part.get('type') == 'end': break
                     if part.get('type') != 'body': raise RuntimeError('Service disconnected')
                     chunk = base64.b64decode(part['data'], validate=True)
-                    writer.write(f'{len(chunk):x}\r\n'.encode()+chunk+b'\r\n'); await writer.drain()
-                writer.write(b'0\r\n\r\n'); await writer.drain()
+                    if method!='HEAD':writer.write(f'{len(chunk):x}\r\n'.encode()+chunk+b'\r\n')
+                    await writer.drain()
+                if method!='HEAD':writer.write(b'0\r\n\r\n')
+                await writer.drain()
         except Exception:
             try: writer.write(b'HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); await writer.drain()
             except OSError: pass

@@ -41,4 +41,6 @@ managed connector attachment, direct Microsoft Learn tools, and scoped GitHub PR
 egress. See [Sandboxes versus regular Container Apps](docs/CONTAINER-APPS-CHOICE.md)
 for the service choice and startup/cost tradeoffs.
 
+See [execution profiling and retention economics](docs/PERFORMANCE-PROFILE.md) for measured fresh, concurrent and live execution latency. Python returns after checkpoint success while durable background cleanup deletes its disposable sandbox. Operations includes a read-only deployed-service inventory and package/storage usage.
+
 See [sandbox storage and archival](docs/SANDBOX-STORAGE.md) for the opt-in seven-day home-to-Blob policy, verified rebuild, safety limits and startup measurements.

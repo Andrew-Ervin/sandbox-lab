@@ -218,7 +218,7 @@ class AzureQuick:
     async def quick(self, code, run, store, input_files=None):
         from .files import inputs
         from . import checkpoints
-        self.queued += 1; started = time.monotonic(); entered = False; ws = None
+        self.queued += 1; started = time.monotonic(); entered = False; ws = None; completed = False
         try:
             async with self.slots:
                 entered = True; self.queued -= 1; self.executing += 1
@@ -228,20 +228,33 @@ class AzureQuick:
                     if not (checkpoints.directory(run['thread_id'])/'latest.json').exists() and self.runtime.storage.enabled:
                         saved = await self.runtime.storage.load('chats',run['thread_id'])
                         if saved: checkpoint_files = checkpoints.validate(saved['files'])
+                    phase=time.monotonic()
                     ws = await self.runtime.create('quick','quick-'+uuid.uuid4().hex[:12],disposable=True)
+                    run['timings']['workspace_seconds']=time.monotonic()-phase
+                    phase=time.monotonic()
                     run.update(pod=ws['name'],status='running',compute_provider='azure'); store.save_run(run)
                     response = await self.runtime.execute(ws['id'],['python','/opt/lab/quick.py'],cwd='/workspace',
                         stdin=json.dumps({'code':code,'files':inputs(store,run['thread_id'],input_files or []),'checkpoint':checkpoint_files}),
                         timeout=value('QUICK_RUN_SECONDS')+15,maximum=value('ARTIFACT_MAX_TOTAL_BYTES')*4+1_000_000)
+                    run['timings']['execution_seconds']=time.monotonic()-phase
+                    phase=time.monotonic()
                     if response['exit_code']: raise RuntimeError('Quick execution failed: '+response.get('stderr','')[:300])
                     result = json.loads(response['stdout']); checkpoint = result.pop('checkpoint',None)
                     if checkpoint is not None:
                         run['checkpoint'] = checkpoints.save(run['thread_id'],run['id'],checkpoint); result['checkpoint'] = run['checkpoint']
                         await self.runtime.storage.save('chats',run['thread_id'],{'files':checkpoints.validate(checkpoint.get('files',[])),'truncated':bool(checkpoint.get('truncated'))})
+                    run['timings']['checkpoint_seconds']=time.monotonic()-phase
                     result.setdefault('artifacts',[]).insert(0,{'name':'quick-source.py','data':base64.b64encode(code.encode()).decode()})
+                    completed=True
                     return result
                 finally:
-                    if ws: await self.runtime.stop(ws['id'],delete=True)
+                    if ws:
+                        phase=time.monotonic()
+                        if completed:
+                            self.runtime.quick_cleanup.schedule(ws['id'])
+                            run['timings']['cleanup_deferred']=True
+                        else:await self.runtime.stop(ws['id'],delete=True)
+                        run['timings']['cleanup_seconds']=time.monotonic()-phase
                     self.executing -= 1
                     run['timings']['total_seconds'] = time.monotonic()-started; store.save_run(run)
         finally:
