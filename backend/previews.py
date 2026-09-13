@@ -113,7 +113,7 @@ class Previews:
             async with httpx.AsyncClient(timeout=2,trust_env=False) as client:
                 async with client.stream('GET',f'http://127.0.0.1:{target["upstream_port"]}/') as response:
                     if response.status_code>=400:return None
-            control.touch(wid);control.warm.demand(record['kind']);return url
+            control.touch(wid);control.warm.demand(record['kind'],record.get('compute_size'));return url
         except (httpx.HTTPError,RuntimeError,OSError):return None
     async def azure_app(self,workspace,port=3000,ide=False):
         from .azure_runtime import runtime

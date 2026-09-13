@@ -37,7 +37,7 @@ def configure(data):
     providers['openrouter']={**providers['lab']}
     merge(models,{'providers':providers})
     current_pi=json.loads((pi/'settings.json').read_text()) if (pi/'settings.json').exists() else {}
-    merge(pi/'settings.json',{'defaultProvider':'lab','defaultModel':current_pi.get('defaultModel',data['model']),'defaultThinkingLevel':data.get('reasoning','xhigh'),'enableInstallTelemetry':False,'checkForUpdates':False,'quietStartup':True})
+    merge(pi/'settings.json',{'defaultProvider':'lab','defaultModel':(current_pi.get('defaultModel') if current_pi.get('defaultModel') in data.get('models',[data['model']]) else data['model']),'defaultThinkingLevel':data.get('reasoning','xhigh'),'enableInstallTelemetry':False,'checkForUpdates':False,'quietStartup':True})
     bin=home/'.local/bin';bin.mkdir(parents=True,exist_ok=True)
     flags=' --provider lab --thinking '+shlex.quote(data.get('reasoning','xhigh'))+' --offline --no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files'
     prefix='#!/bin/sh\nexport PI_OFFLINE=1 PI_TELEMETRY=0 ORI_TELEMETRY=0 ORI_NO_UPDATE_CHECK=1\nexport NO_PROXY="localhost,127.0.0.1"\n'
@@ -194,7 +194,7 @@ os.execv(str(real),[str(real),*args])
     model=shlex.quote(data['model']);effort=shlex.quote(data.get('reasoning','xhigh'))
     for name,command in [('claude-lab','claude'),('codex-lab','codex'),('ori-code-lab','code --approvals manual')]:
         path=bin/name
-        selector="import json,tomllib; from pathlib import Path; p=Path.home()/"+repr('.claude/settings.json' if command=='claude' else '.codex/config.toml')+"; d=(json.loads(p.read_text()) if p.suffix=='.json' else tomllib.loads(p.read_text())) if p.exists() else {}; print(d.get('model',"+repr(data['model'])+"))"
+        selector="import json,tomllib; from pathlib import Path; p=Path.home()/"+repr('.claude/settings.json' if command=='claude' else '.codex/config.toml')+"; d=(json.loads(p.read_text()) if p.suffix=='.json' else tomllib.loads(p.read_text())) if p.exists() else {}; selected=d.get('model'); print(selected if selected in "+repr(data.get('models',[data['model']]))+" else "+repr(data['model'])+")"
         choose='LAB_SELECTED_MODEL=$(python -I -c '+shlex.quote(selector)+')\n'
         choose+='for arg in "$@"; do case "$arg" in --model|--model=*|-m) exec /usr/local/bin/ori '+command+' --reasoning-effort '+effort+' "$@" ;; esac; done\n'
         path.write_text(prefix+choose+'exec /usr/local/bin/ori '+command+' --model "$LAB_SELECTED_MODEL" --reasoning-effort '+effort+' "$@"\n')

@@ -55,3 +55,14 @@ def test_editor_activity_renews_only_its_existing_ide_listener(monkeypatch):
     assert preview.targets[5002]['expires']==1
     assert preview.targets[5003]['expires']==1
     assert not manager.renew_workspace('missing')
+
+@pytest.mark.parametrize('origin,status',[('null',200),('https://untrusted.example',403)])
+def test_opaque_app_api_post_requires_capability_and_valid_origin(origin,status):
+    import httpx
+    client=httpx.AsyncClient(transport=httpx.MockTransport(lambda request:httpx.Response(200,json={'ok':True})))
+    preview.targets[9998]={'kind':'app','expires':time.time()+60,'capability':'test-capability','upstream_port':1234,'http_client':client}
+    try:
+        with TestClient(preview.app,base_url='http://127.0.0.1:9998') as browser:
+            assert browser.post('/_lab/test-capability/api/solve',headers={'origin':origin},json={}).status_code==status
+            assert browser.post('/api/solve',headers={'origin':'null'},json={}).status_code==404
+    finally:preview.targets.pop(9998,None)

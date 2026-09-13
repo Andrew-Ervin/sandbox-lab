@@ -440,11 +440,11 @@ async def prewarm_compute():
 
 @app.post('/api/developer/workspaces/{workspace_id}/heartbeat')
 async def developer_heartbeat(workspace_id: str):
-    workspace=next((w for w in await developer.list() if w['id']==workspace_id),None)
-    if not workspace: raise HTTPException(404)
+    try:workspace=developer.lookup(workspace_id)
+    except (ValueError,RuntimeError):raise HTTPException(404) from None
     developer.touched[workspace_id]=time.time()
     developer.runtime.touch(workspace_id)
-    developer.runtime.warm.demand('developer')
+    developer.runtime.warm.demand('developer',developer.runtime.record(workspace_id).get('compute_size'))
     await developer.ide(workspace)
     control=azure_runtime();record=control.record(workspace_id)
     if time.time()-record.get('preferences_checked_at',0)>30:

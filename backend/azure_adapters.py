@@ -185,6 +185,8 @@ class AzureDeveloper(AzureWorkspaces):
                 if until < time.time()+300 and time.time()-self.touched.get(wid,0)<600:
                     try:
                         from .capabilities import issue
+                        from .workspace_models import refresh
+                        await refresh()
                         payload = issue(wid)
                         await self.invoke(await self.runtime.get(wid),(ROOT/'sandbox/rotate_capability.py').read_text(),payload)
                         self.capability_until[wid] = payload['expires']; self.renewal_error = None

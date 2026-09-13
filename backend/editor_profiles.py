@@ -60,14 +60,16 @@ class EditorProfiles:
             self.baseline(record['id'],await self.command(record,{'action':'export'}))
 
     async def for_open(self,record):
-        # Capture other already-running workspaces without waking stopped ones.
-        for other in self.control.records():
-            if (other['id']!=record['id'] and other.get('owner')==record.get('owner')
-                    and other['kind']=='developer' and other['state']=='running'
-                    and not other.get('warm') and other['id'] not in self.control.resizing):
-                try:await self.capture(other)
-                except Exception:
-                    self.control.telemetry.event('developer',other['id'],'editor_peer_capture_failed',error='Using last saved editor profile; peer capture failed')
+        # Prefer the most recently used peer, with a total two-second budget.
+        peers=[other for other in self.control.records()
+               if other['id']!=record['id'] and other.get('owner')==record.get('owner')
+               and other['kind']=='developer' and other['state']=='running'
+               and not other.get('warm') and other['id'] not in self.control.resizing]
+        if peers:
+            other=max(peers,key=lambda item:item.get('last_activity_at',0))
+            try:await asyncio.wait_for(self.capture(other),timeout=2)
+            except Exception:
+                self.control.telemetry.event('developer',other['id'],'editor_peer_capture_failed',error='Using last saved editor profile; peer capture failed or timed out')
         await self.restore(record)
         profile=self.get(record.get('owner'))['profile']
         old=self.extension_tasks.get(record['id'])

@@ -5,7 +5,7 @@ from fastapi import FastAPI,Request,HTTPException,WebSocket,WebSocketDisconnect
 from fastapi.responses import Response, JSONResponse
 from .image_view import render as render_image
 app=FastAPI(docs_url=None,redoc_url=None,openapi_url=None)
-# One app per localhost port: relative assets resolve normally, with no path rewriting.
+# One isolated app per localhost port, with capability-scoped asset URLs.
 targets={}
 
 def upstream_client(target):
@@ -72,7 +72,7 @@ async def preview(path:str,request:Request):
         from .previews import previews
         control=runtime();record=control.record(target['workspace_id'])
         if record['state']!='running':raise HTTPException(409,'Reopen this workspace to resume it')
-        control.touch(record['id']);control.warm.demand('developer');previews.renew_workspace(record['id'])
+        control.touch(record['id']);control.warm.demand('developer',record.get('compute_size'));previews.renew_workspace(record['id'])
         if time.time()-record.get('preferences_saved_at',0)>30:
             await control.editor_profiles.capture(record)
             record=control.record(record['id']);record['preferences_saved_at']=time.time();control.save(record)
@@ -113,7 +113,9 @@ async def preview(path:str,request:Request):
             content=render(content,name);media='text/html'
         if media=='text/html':content+=ACTIVITY
         return Response(content,media_type=media,headers=common)
-    if request.method not in ('GET','HEAD') and request.headers.get('origin')!=f'http://127.0.0.1:{port}':raise HTTPException(403,'Untrusted preview origin')
+    allowed_origins={f'http://127.0.0.1:{port}'}
+    if target['kind']=='app':allowed_origins.add('null')  # Opaque sandbox; capability path already authenticated.
+    if request.method not in ('GET','HEAD') and request.headers.get('origin') not in allowed_origins:raise HTTPException(403,'Untrusted preview origin')
     raw=await request.body()
     if len(raw)>2_000_000: raise HTTPException(413)
     # Fixed loopback destination from our own Azure port forward; never a user URL.
@@ -146,6 +148,9 @@ async def preview(path:str,request:Request):
         profile=runtime().editor_profiles.get(target.get('owner',''))['profile'] or {}
         code=(ROOT/'sandbox/editor_layout.js').read_text().replace('__LAB_PROFILE__',__import__('json').dumps(profile.get('layout',{})).replace('<','\\u003c')).replace('__LAB_KEYS__',__import__('json').dumps(sorted(LAYOUT_KEYS)))
         body=body.replace(b'<head>',b'<head><script>'+code.encode()+b'</script>',1)
+    if target['kind']=='app':
+        from .preview_assets import rewrite
+        body=rewrite(body,r.headers.get('content-type',''),target['capability'])
     if target['kind']!='ide' and 'text/html' in r.headers.get('content-type',''):
         base=b'<base href="/_lab/'+target['capability'].encode()+b'/">'
         body=body.replace(b'<head>',b'<head>'+base,1)

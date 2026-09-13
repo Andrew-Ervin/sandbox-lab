@@ -48,3 +48,20 @@ console.log(view.html());'''.replace('ROOT', json.dumps(str(tmp_path)))
     assert html.count('<script nonce="testnonce">') == 2
     assert '<\\/script>' in html and '<\\/style>' in html
     assert 'src=' not in html and 'href=' not in html
+
+
+def test_wrapper_rejects_a_delisted_saved_model(tmp_path,monkeypatch):
+    import shlex,sys
+    monkeypatch.setenv('HOME',str(tmp_path))
+    monkeypatch.setattr('sandbox.harness_setup.platform.machine',lambda:'x86_64')
+    (tmp_path/'.local/share/lab-harnesses/node_modules/@openai/codex-linux-x64').mkdir(parents=True)
+    real=tmp_path/'.local/share/lab-harnesses/node_modules/.bin';real.mkdir()
+    for name in ('codex','claude'):(real/name).write_text('placeholder')
+    launchers=tmp_path/'.local/bin';launchers.mkdir(parents=True)
+    configure_gui_harnesses(tmp_path,launchers,{'model':'test/default','models':['test/default','test/allowed']},'#!/bin/sh\n')
+    for model,expected in [('test/allowed','test/allowed'),('test/removed','test/default')]:
+        (tmp_path/'.codex/config.toml').write_text('model = '+json.dumps(model)+'\n')
+        line=next(x for x in (launchers/'codex-lab').read_text().splitlines() if x.startswith('LAB_SELECTED_MODEL='))
+        argv=shlex.split(line.removeprefix('LAB_SELECTED_MODEL=$(').removesuffix(')'))
+        result=subprocess.run([sys.executable,*argv[1:]],capture_output=True,text=True,check=True)
+        assert result.stdout.strip()==expected

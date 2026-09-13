@@ -61,3 +61,7 @@ Projects receive an AI name of 1–4 words from their starting request. Older el
 ## Personal workspaces
 
 Microsoft Entra tenant/object identity scopes project/history ownership and workspace routes. Existing local data migrates only to the configured operator after SQLite backups. Display names (including accepted AI suggestions with spaces) are labels; reopen, sync and resize use immutable workspace IDs. Workspace lists sort by last explicit use, without changing history ordering on selection. Editor preferences are stored per account and merged using per-workspace baselines. Workspace contents and native coding conversations remain separate. See [Identity](IDENTITY.md) and [Scaling](SCALING.md).
+
+## Inactive home archival
+
+With the operator's seven-day archive policy enabled, stopped headless and developer homes move to verified private Blob archives. Opening recreates compute and restores the saved home, while logical identity and history remain. Running processes and scratch state outside the home are not preserved. See [storage policy](SANDBOX-STORAGE.md) for safeguards, capacity limits and failure behavior.

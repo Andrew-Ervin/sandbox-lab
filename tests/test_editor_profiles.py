@@ -74,3 +74,20 @@ async def test_unhealthy_peer_does_not_block_target_open():
     await profiles.for_open(a)
     profiles.restore.assert_awaited_once_with(a)
     control.telemetry.event.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_open_uses_only_most_recent_peer_and_bounds_wait(monkeypatch):
+    from unittest.mock import Mock
+    import asyncio
+    a={'id':'a','owner':'alice','kind':'developer','state':'running'}
+    records=[a,{**a,'id':'b','last_activity_at':1},{**a,'id':'c','last_activity_at':2}]
+    control=SimpleNamespace(db=sqlite3.connect(':memory:'),records=lambda:records,resizing=set(),telemetry=SimpleNamespace(event=Mock()))
+    profiles=EditorProfiles(control);profiles.capture=AsyncMock();profiles.restore=AsyncMock()
+    async def timeout(coro,timeout):
+        assert timeout==2
+        await coro
+        raise asyncio.TimeoutError()
+    monkeypatch.setattr('backend.editor_profiles.asyncio.wait_for',timeout)
+    await profiles.for_open(a)
+    profiles.capture.assert_awaited_once_with(records[2])
+    profiles.restore.assert_awaited_once_with(a)

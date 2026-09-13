@@ -98,7 +98,7 @@ async def serve(runtime, record, ready=None):
                                 response=httpx.Response(200,json={'object':'list','models':[],'data':[{'id':item,'object':'model','owned_by':'lab'} for item in models]})
                                 await send({'type':'headers','status':200,'content_type':'application/json'})
                                 await send({'type':'body','data':base64.b64encode(response.content).decode()});await send({'type':'end'});return
-                            runtime.touch(record['id']);runtime.warm.demand('developer')
+                            runtime.touch(record['id']);runtime.warm.demand('developer',record.get('compute_size'))
                             runtime.active_commands[record['id']]=runtime.active_commands.get(record['id'],0)+1
                             model_active=True
                             from .previews import previews

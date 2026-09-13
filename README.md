@@ -40,3 +40,5 @@ For the ACA/AKS comparison and review-only network/identity templates, see [Netw
 managed connector attachment, direct Microsoft Learn tools, and scoped GitHub PR
 egress. See [Sandboxes versus regular Container Apps](docs/CONTAINER-APPS-CHOICE.md)
 for the service choice and startup/cost tradeoffs.
+
+See [sandbox storage and archival](docs/SANDBOX-STORAGE.md) for the opt-in seven-day home-to-Blob policy, verified rebuild, safety limits and startup measurements.

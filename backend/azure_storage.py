@@ -76,4 +76,6 @@ class AzureStorage:
     def status(self):
         return {'enabled':self.enabled, 'provider':'Azure Blob', 'tier':'Standard Hot LRS',
                 'checkpoints':len(self.index), 'current_bytes':sum(x.get('bytes',0) for x in self.index.values()),
+                'archive_after_days':self.runtime.config.get('archive_after_days'), 'home_archive_max_bytes':600_000_000,
+                'archived_workspaces':sum(bool(r.get('cold_archive')) and not r.get('sandbox_id') for r in self.runtime.records()),
                 'version_retention_days':7, 'weekly_upload_limit_bytes':2_000_000_000, 'credentials_in_sandboxes':False}

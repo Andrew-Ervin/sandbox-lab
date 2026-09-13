@@ -1160,11 +1160,13 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                     </div>}
                   </div>
                 )}
+                <div inert={threadLoading} aria-hidden={threadLoading || undefined} style={{ height: '100%', width: '100%', minWidth: 0 }}>
                 <ChatKit
                   control={chat.control}
                   className="chat-surface"
                   style={{ opacity: threadLoading ? 0 : 1 }}
                 />
+                </div>
               </div>
               <CodingSessionStrip
                 thread={view === 'chat' ? thread : null}
