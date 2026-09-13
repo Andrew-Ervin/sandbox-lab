@@ -88,8 +88,8 @@ async def serve(runtime, record, ready=None):
                             auth = gateway.authorize(Request({'type':'http','headers':[(b'authorization',authorization.encode())]}))
                             if auth['workspace'] != record['id']: raise ValueError('Workspace capability mismatch')
                             if path=='/v1/models':
-                                from .config import MODEL
-                                response=httpx.Response(200,json={'object':'list','models':[],'data':[{'id':MODEL,'object':'model','owned_by':'lab'}]})
+                                models=auth.get('models',[auth['model']])
+                                response=httpx.Response(200,json={'object':'list','models':[],'data':[{'id':item,'object':'model','owned_by':'lab'} for item in models]})
                                 await send({'type':'headers','status':200,'content_type':'application/json'})
                                 await send({'type':'body','data':base64.b64encode(response.content).decode()});await send({'type':'end'});return
                             runtime.touch(record['id']);runtime.warm.demand('developer')
@@ -98,7 +98,7 @@ async def serve(runtime, record, ready=None):
                             from .previews import previews
                             previews.renew_workspace(record['id'])
                             protocol = path.rsplit('/', 1)[-1]
-                            body = gateway.prepare_body(json.loads(raw)) if protocol == 'completions' else gateway.prepare_native(json.loads(raw), protocol)
+                            body = gateway.prepare_body(json.loads(raw),auth) if protocol == 'completions' else gateway.prepare_native(json.loads(raw), protocol,auth)
                             charge = runtime.budget.reserve('model',model_reservation(runtime,body))
                             response = await model_client.post(path,json=body,headers={'Authorization':authorization})
                         else: raise ValueError('Service denied')

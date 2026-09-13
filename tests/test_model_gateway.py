@@ -84,6 +84,13 @@ def test_client_cannot_weaken_privacy_or_enable_other_search(gateway):
     assert 'tools' not in body
 
 
+def test_capability_can_select_only_an_operator_enabled_workspace_model(gateway):
+    claims={'model':'test/model','models':['test/model','openai/other']}
+    assert gateway.prepare_body({'messages':[{'role':'user','content':'hello'}],'model':'openai/other'},claims)['model']=='openai/other'
+    with pytest.raises(HTTPException,match='not enabled'):
+        gateway.prepare_body({'messages':[{'role':'user','content':'hello'}],'model':'unpriced/model'},claims)
+
+
 def test_old_openai_reasoning_is_omitted_without_losing_tool_or_current_turn_history(gateway):
     gateway.model = 'openai/test-model'
     reasoning = {'reasoning_details': [{'type': 'reasoning.encrypted', 'data': 'opaque'}],

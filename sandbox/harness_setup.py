@@ -12,7 +12,7 @@ def configure(data):
     elif package_script.exists():exec(compile(package_script.read_text(),str(package_script),'exec'),{'__name__':'__main__'})
     if gui and data.get('token'):
         token=config/'token';token.write_text(data['token']);token.chmod(0o600)
-        (config/'capability.json').write_text(json.dumps({'expires':data['expires'],'model':data['model']}))
+        (config/'capability.json').write_text(json.dumps({'expires':data['expires'],'model':data['model'],'models':data.get('models',[data['model']])}))
     pi=home/'.pi/agent';pi.mkdir(parents=True,exist_ok=True)
     def merge(path,updates):
         old=json.loads(path.read_text()) if path.exists() else {}
@@ -25,7 +25,7 @@ def configure(data):
     providers['lab']={'baseUrl':'http://127.0.0.1:8080/v1','api':'openai-completions',
         'apiKey':'!cat '+shlex.quote(str(config/'token')) if gui else '$LAB_MODEL_TOKEN','authHeader':True,
         'compat':{'supportsStore':False,'supportsDeveloperRole':True},
-        'models':[{'id':data['model'],'name':'GPT-5.6 Luna · OpenRouter lab','reasoning':True,'thinkingLevelMap':{'xhigh':'xhigh'},'input':['text'],'contextWindow':1050000,'maxTokens':16000,'cost':{'input':0,'output':0,'cacheRead':0,'cacheWrite':0}}]}
+        'models':[{'id':item,'name':('GPT-5.6 Luna' if item==data['model'] else item)+' · OpenRouter lab','reasoning':True,'thinkingLevelMap':{'xhigh':'xhigh'},'input':['text'],'contextWindow':1050000,'maxTokens':16000,'cost':{'input':0,'output':0,'cacheRead':0,'cacheWrite':0}} for item in data.get('models',[data['model']])]}
     merge(models,{'providers':providers})
     merge(pi/'settings.json',{'defaultProvider':'lab','defaultModel':data['model'],'defaultThinkingLevel':data.get('reasoning','xhigh'),'enableInstallTelemetry':False,'checkForUpdates':False,'quietStartup':True})
     bin=home/'.local/bin';bin.mkdir(parents=True,exist_ok=True)

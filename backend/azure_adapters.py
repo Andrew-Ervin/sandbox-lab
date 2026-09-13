@@ -111,13 +111,13 @@ class AzureDeveloper(AzureWorkspaces):
         return {'id':ws['id'],'name':ws['name'],'status':ws['latest_build']['status'],'provider':'azure',
                 'harness_status':self.harness.get(ws['id'],'Ready'),
                 'last_used_at':self.runtime.record(ws['id']).get('last_opened_at',self.runtime.record(ws['id'])['created_at']),
-                'compute_size':self.runtime.record(ws['id']).get('compute_size','performance'),
+                'compute_size':self.runtime.record(ws['id']).get('compute_size','balanced'),
                 'harness_error':self.setup_errors.get(ws['id']),
                 'url':f'/api/developer/workspaces/{ws["id"]}/open', 'ide_url':f'/api/developer/workspaces/{ws["id"]}/open'}
 
     async def list(self): return [self.public(w) for w in await self.runtime.list('developer')]
 
-    async def start(self, name, *, owner=None, compute_size='balanced'):
+    async def start(self, name, *, owner=None, compute_size='light'):
         from .titles import clean_title
         from .identity import current_owner
         name=clean_title(name)

@@ -13,7 +13,7 @@ Follow [local setup](docs/LOCAL-SETUP.md), provide your own private credentials,
 | Ordinary conversation | Local broker and model inference | Local SQLite history; no project allocation |
 | Short Python | Custom scientific image, 1 CPU / 2 GiB | Per-chat files and artifacts; fresh interpreter each call |
 | Headless coding | One sandbox per project, 2 CPU / 4 GiB | Independent project home; chats in that project reuse it |
-| Developer workstation | Independent sandbox, 4 CPU / 8 GiB | VS Code, Pi/Ori and developer packages/history |
+| Developer workstation | Independent sandbox, 1 CPU / 2 GiB by default; selectable through 4 CPU / 8 GiB | VS Code, Pi/Ori and developer packages/history |
 | App | Process in the owning project's or workstation's sandbox | Saved source and launch recipe; no separate Azure app per preview |
 
 Source synchronizes between linked headless and developer homes on handoff and every 15 seconds while both are active. Three-way comparison preserves conflicting changes for a user choice. Credentials, dependencies, unsaved buffers and processes stay separate. See [projects](docs/PROJECTS.md).
@@ -32,4 +32,4 @@ Validate changes with `.venv/bin/python -m pytest -q`, `npm run test:polling`, `
 
 Keep `.local`, `.env`, credentials, generated apps, conversation records and workspace files private. Run `python3 scripts/repo_audit.py --staged` on the exact index before any commit. Public publication requires explicit user authorization.
 
-User identity and editor preferences are described in [Identity and personal settings](docs/IDENTITY.md). Workspace display names are independent of runtime identifiers. New workspaces default to 2 CPU / 4 GiB, with light and performance options; changing size requires a file-preserving restart.
+User identity and editor preferences are described in [Identity and personal settings](docs/IDENTITY.md). Workspace display names are independent of runtime identifiers. New workspaces default to 1 CPU / 2 GiB; the sandbox tiers are 1 / 2 / 20 GiB, 2 / 4 / 40 GiB and 4 / 8 / 80 GiB CPU, memory and disk. Changing size creates a clean sandbox, restores eligible source from private Blob, and reapplies the user's portable editor profile.

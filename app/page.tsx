@@ -534,7 +534,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
       },
     },
   );
-  const startWorkspace = async (name: string, compute_size='balanced') => {
+  const startWorkspace = async (name: string, compute_size='light') => {
     setStarting(true);
     setError('');
     try {
@@ -747,7 +747,23 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
     setView('chat');
     setPreview(null);
     setThread(id);
-    void transport.current.detach().then(() => {if (selection === threadSelection.current) return chat.setThreadId(id);}).catch((e: Error) => {setThreadLoading(false);setError(e.message);});
+    void (async () => {
+      try {
+        await transport.current.detach();
+        if (selection !== threadSelection.current) return;
+        await chat.setThreadId(id);
+      } catch (e) {
+        if (selection === threadSelection.current) {
+          setThreadLoading(false);
+          setError((e as Error).message);
+        }
+      } finally {
+        // ChatKit normally clears this through onThreadLoadEnd.  Clear the
+        // local transition as well so a missed terminal event cannot leave a
+        // newly created or older conversation behind a permanent overlay.
+        if (selection === threadSelection.current) setThreadLoading(false);
+      }
+    })();
   };
   const openProject = (id: string | null) => {
     setSelectedProject(id);

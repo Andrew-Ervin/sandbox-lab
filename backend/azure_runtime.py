@@ -24,7 +24,9 @@ PROFILES = {
 }
 
 
-SIZES={'light':{'cpu':'1000m','memory':'2048Mi','hourly_usd':.108},'balanced':{'cpu':'2000m','memory':'4096Mi','hourly_usd':.216},'performance':{'cpu':'4000m','memory':'8192Mi','hourly_usd':.432}}
+# Sandbox CPU, memory and disk are a single Azure tier.  The image is separate
+# from this choice; changing a tier never needs a new image build.
+SIZES={'light':{'cpu':'1000m','memory':'2048Mi','disk_gib':20,'hourly_usd':.108},'balanced':{'cpu':'2000m','memory':'4096Mi','disk_gib':40,'hourly_usd':.216},'performance':{'cpu':'4000m','memory':'8192Mi','disk_gib':80,'hourly_usd':.432}}
 
 class CapacityBusy(RuntimeError): pass
 
@@ -110,7 +112,7 @@ class AzureRuntime:
             record = previous or (self.warm.claim(kind,name,disposable=disposable,compute_size=compute_size) if not warm else None)
             if record is None:
                 record={'id':wid or str(uuid.uuid4()),'name':name,'kind':kind,'state':'creating','created_at':time.time(),'updated_at':time.time(),'sandbox_id':None,'disposable':disposable or kind=='quick','warm':warm}
-                if kind=='developer':record['compute_size']=compute_size or 'balanced'
+                if kind=='developer':record['compute_size']=compute_size or 'light'
                 self.save(record)
             if owner and not warm:record['owner']=owner;self.save(record)
         return await self.start(record['id'],standby=warm)
@@ -184,6 +186,9 @@ class AzureRuntime:
             stages['azure_allocate_or_resume_seconds'] = round(time.monotonic()-started,3)
             await self.bootstrap(record)
             stages['bootstrap_seconds'] = round(time.monotonic()-started-stages['azure_allocate_or_resume_seconds'],3)
+            if record.get('source_restore'):
+                await self.restore_source(record)
+                stages['source_restore_seconds'] = round(time.monotonic()-started-sum(stages.values()),3)
             record.update(state='running', prepared=True, updated_at=time.time(), last_activity_at=time.time()); self.save(record)
             await self.ensure_services(record)
             record['startup_timings'] = {**stages, 'total_seconds':round(time.monotonic()-started,3)}
@@ -460,45 +465,21 @@ class AzureRuntime:
         if wid in self.resizing or self.active_commands.get(wid):raise RuntimeError('Wait for the current workspace operation to finish')
         await self.start(wid)
         self.resizing.add(wid)
-        remote='/tmp/lab-home-'+uuid.uuid4().hex+'.parts'
-        local=self.root/'home-transfers'/(wid+'-'+uuid.uuid4().hex+'.tgz')
-        local.parent.mkdir(exist_ok=True,mode=0o700)
         try:
-            # Snapshot restore cannot change CPU/RAM. Transfer the user's home
-            # instead; preserve the original stopped environment as recovery.
+            # A snapshot cannot change a Sandbox tier.  Copy only durable source
+            # to Blob, then rebuild a clean home and re-apply the portable editor
+            # profile.  The previous stopped sandbox remains a recovery point.
+            # This avoids serializing caches and node_modules (which made a
+            # nominal size change wait for multi-gigabyte home transfers).
+            if not self.storage.enabled:raise RuntimeError('Fast resize needs the approved Blob source checkpoint; original workspace retained')
             await self.editor_profiles.capture(self.record(wid))
-            result=await self.execute(wid,['python','-I','-c',(ROOT/'sandbox/home_archive.py').read_text()],stdin=json.dumps({'path':remote}),bootstrap=True,timeout=300)
-            if result['exit_code']:
-                diagnostics=self.root/'diagnostics';diagnostics.mkdir(exist_ok=True,mode=0o700)
-                path=diagnostics/(wid+'-resize.json');path.write_text(json.dumps(result));path.chmod(0o600)
-                reason='Home transfer timed out' if result.get('timed_out') else 'Could not save the complete home for resizing'
-                if 'safe migration limit' in result.get('stderr',''):reason='The home exceeds the supported transfer size'
-                raise RuntimeError(reason+'; original workspace retained')
-            metadata=json.loads(result['stdout']);size_bytes=metadata['bytes']
-            if metadata.get('parts')!=(size_bytes+7_999_999)//8_000_000:raise RuntimeError('Invalid workspace transfer metadata')
-            if not 0<size_bytes<=2_000_000_000:raise RuntimeError('Workspace transfer is too large')
-            record=self.record(wid);group=self.profile('developer')['group']
-            with local.open('xb') as output:
-                local.chmod(0o600)
-                for index in range(metadata['parts']):
-                    part=remote+f'/part-{index:04d}'
-                    trusted='/var/lib/lab/home-download.part'
-                    script="import os,stat; from pathlib import Path; fd=os.open("+repr(part)+",os.O_RDONLY|os.O_NOFOLLOW); info=os.fstat(fd); assert stat.S_ISREG(info.st_mode) and info.st_uid==1000 and info.st_size<=8000000; data=os.read(fd,8000001); os.close(fd); p=Path("+repr(trusted)+"); p.unlink(missing_ok=True); p.write_bytes(data); p.chmod(0o600)"
-                    await self.root_exec(record,'python -I -c '+shlex.quote(script))
-                    data=await self.transport.read(group,record['sandbox_id'],trusted,8_000_000)
-                    if len(data)!=min(8_000_000,size_bytes-output.tell()):raise RuntimeError('Workspace transfer segment was incomplete')
-                    output.write(data)
-            if local.stat().st_size!=size_bytes:raise RuntimeError('Workspace transfer was incomplete')
-            await self.transport.call('remove_file',group,record['sandbox_id'],{'path':trusted})
-            # Only this operation's generated segments; never the source home.
-            script="import shutil; from pathlib import Path; p=Path("+repr(remote)+"); assert p.parent==Path('/tmp') and p.name.startswith('lab-home-') and not p.is_symlink(); shutil.rmtree(p)"
-            await self.root_exec(record,'python -I -c '+shlex.quote(script))
+            await self.backup_source(self.record(wid))
             await self.stop(wid)
             async with self.workspace_locks.setdefault(wid,asyncio.Lock()):
                 record=self.record(wid)
                 record.setdefault('previous_sandboxes',[]).append(record['sandbox_id'])
                 record.pop('snapshot_id',None)
-                record.update(home_restore=str(local),sandbox_id=None,compute_size=size,create_submitted=False,state='creating',prepared=False)
+                record.update(source_restore=True,sandbox_id=None,compute_size=size,create_submitted=False,state='creating',prepared=False)
                 self.save(record)
                 from .previews import previews
                 await previews.remove_workspace(wid)
@@ -517,6 +498,18 @@ class AzureRuntime:
         payload = json.loads(result['stdout']); files = checked_files(payload)
         await self.storage.save('workspaces',record['id'],{'files':files,'kind':record['kind']})
         current = self.record(record['id']); current['last_checkpoint_at'] = time.time(); current.pop('storage_error',None); self.save(current)
+
+    async def restore_source(self, record):
+        payload=await self.storage.load('workspaces',record['id'])
+        files=(payload or {}).get('files',[])
+        # `backup_source` already validates this exact bounded file format.
+        from .workspace_links import checked_files
+        files=checked_files({'files':files})
+        changes=[{'path':item['path'],'before':None,'data':item['data'],'mode':0o600} for item in files]
+        result=await self.execute(record['id'],['python','-I','-c',(ROOT/'sandbox/sync_project.py').read_text()],stdin=json.dumps({'scope':'','changes':changes}),bootstrap=True,timeout=45,maximum=1_000_000)
+        if result['exit_code'] or len(json.loads(result['stdout']).get('applied',[]))!=len(changes):
+            raise RuntimeError('New workspace could not restore its source; original workspace retained')
+        current=self.record(record['id']);current.pop('source_restore',None);self.save(current)
 
     async def maintain(self):
         while True:

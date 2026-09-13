@@ -351,7 +351,7 @@ async def rename_workspace(workspace_id:str,request:Request):
 async def developer_start(request: Request):
     data=await request.json()
     try:
-        workspace=await developer.start(data.get('name','New workspace'),owner=request.state.owner,compute_size=data.get('compute_size','balanced'))
+        workspace=await developer.start(data.get('name','New workspace'),owner=request.state.owner,compute_size=data.get('compute_size','light'))
         project=store.link_developer(workspace['id'],request.state.owner,workspace['name'])
         workspace.update(project_id=project['id'],project_name=project['name'])
         response=JSONResponse(workspace)
