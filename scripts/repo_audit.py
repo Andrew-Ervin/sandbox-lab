@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_PARTS = {'.local', '.env', '.venv', '.runtime.nosync', 'node_modules', '.openai', '.terraform',
                  'conversations', 'artifacts', 'checkpoints', 'quick-checkpoints', 'user-apps', 'sessions'}
 PRIVATE_SUFFIXES = ('.db', '.sqlite', '.sqlite3', '.pem', '.key', '.p12', '.pfx', '.vsix', '.log',
-                    '.tfstate', '.tfvars', '.tfvars.json', '.kubeconfig', '.zip', '.tar', '.tgz', '.gz')
+                    '.tfstate', '.tfplan', '.tfvars', '.tfvars.json', '.kubeconfig', '.zip', '.tar', '.tgz', '.gz')
 PATTERNS = {
     'temporary local experiment wiring (roll back before publishing)': re.compile(rb'(?m)^\s*(?:import live_bridge|from \.chat import live_bridge|from gui_setup import install)\b'),
     'provider credential': re.compile(rb'sk-or-v1-[0-9a-f]{48,}', re.I),
@@ -29,6 +29,7 @@ def private_path(name):
     return (any(part in PRIVATE_PARTS for part in path.parts)
             or path.name.startswith('.env') and path.name != '.env.example'
             or name == 'docs/VERIFICATION.md'
+            or path.parts[:2] == ('reports', 'operations')
             or path.name in ('kubeconfig', 'broker-kubeconfig')
             or bool(re.search(r'\.(?:tfstate|sqlite3?|db)(?:[.-].*)?$', path.name))
             or name.endswith(PRIVATE_SUFFIXES) and not name.endswith('.example.tfvars'))

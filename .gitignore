@@ -64,12 +64,17 @@ kubeconfig
 .terraform/
 *.tfstate
 *.tfstate.*
+*.tfplan
 *.tfvars
 *.tfvars.json
 !*.example.tfvars
+crash.log
 # Share only curated source/reference reports, never copied session exports
 /conversations/
 /artifacts/
 /checkpoints/
 /user-apps/
 /sessions/
+
+# Local standalone operations demo; the product UI lives in components/.
+/reports/operations/

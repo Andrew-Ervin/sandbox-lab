@@ -2,7 +2,6 @@ import json,os,subprocess,sys
 import pytest
 from backend.limits import validate,script_with_limits
 from backend.workspace_links import checked_files
-from backend.compute import pod_manifest
 
 def test_default_limits_are_consistent():validate()
 

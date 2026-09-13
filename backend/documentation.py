@@ -7,10 +7,10 @@ from .config import ROOT, MODEL, REASONING
 TOPICS = {
     'overview': ('docs/ARCHITECTURE-GUIDE.md',),
     'projects': ('docs/PROJECTS.md',),
-    'packages': ('docs/PACKAGES.md',),
-    'security': ('docs/SECURITY.md', 'docs/NATIVE_CODER_TRIAL.md', 'docs/MODEL-ROUTING.md'),
+    'packages': ('docs/PACKAGES.md','docs/SCIENTIFIC-PYTHON.md'),
+    'security': ('docs/SECURITY.md', 'docs/MODEL-ROUTING.md'),
     'scaling': ('docs/SCALING.md','docs/LIMITS.md'),
-    'azure': ('docs/AZURE-IMPLEMENTATION.md',),
+    'azure': ('docs/AZURE-SANDBOX-RUNTIME.md','docs/AZURE-IMPLEMENTATION.md'),
     'developer': ('docs/GUI_HARNESSES.md', 'docs/PROJECTS.md'),
     'setup': ('docs/LOCAL-SETUP.md','docs/MODEL-ROUTING.md'),
 }
@@ -22,18 +22,16 @@ def public_configuration():
     def number(key, default):
         try:return max(0,int(os.getenv(key,str(default))))
         except ValueError:return default
-    return {'model':MODEL,'reasoning':REASONING,'project_engine':os.getenv('PROJECT_ENGINE','ori-pi'),
-            'storage':'Local SQLite, artifacts/checkpoints and separate Coder home volumes; no cloud sync',
+    from .azure_runtime import runtime
+    control=runtime()
+    return {'model':MODEL,'reasoning':REASONING,'project_engine':'azure',
+            'storage':'Azure sandbox disks, private Blob source checkpoints and local chat SQLite',
             'identity':'Single local owner; production Entra integration is not connected',
             'web_search_enabled':os.getenv('LAB_ALLOW_WEB_SEARCH','true').lower()=='true',
             'project_sync_seconds':number('PROJECT_SYNC_SECONDS',15),
-            'quick_idle_seconds':number('QUICK_IDLE_SECONDS',300),
-            'project_idle_seconds':number('PROJECT_IDLE_SECONDS',300),
-            'developer_idle_seconds':number('DEVELOPER_IDLE_SECONDS',600),
-            'project_concurrency':number('PROJECT_CONCURRENCY',2),
-            'project_max_running':number('PROJECT_MAX_RUNNING',4),
-            'quick_concurrency':number('QUICK_CONCURRENCY',4),
-            'quick_max_pods':number('QUICK_MAX_PODS',8),
+            'warm_after_demand_seconds':600,'warm_per_active_role':1,
+            'max_hourly_compute_usd':control.config.get('max_hourly_compute_usd',12),
+            'profiles':{k:{field:control.profile(k)[field] for field in ('cpu','memory','seconds','idle_seconds','active_limit','retained_limit')} for k in ('quick','headless','developer')},
             'mcp_mock_enabled':os.getenv('LAB_ENABLE_MCP_EXPERIMENT','false').lower()=='true'}
 
 def read_documentation(topic, query='', root=ROOT):

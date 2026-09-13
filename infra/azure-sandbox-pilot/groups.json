@@ -1,0 +1,78 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus2"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.App/sandboxGroups",
+      "apiVersion": "2026-02-01-preview",
+      "name": "lab-quick",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "tags": {
+        "application": "sandbox-lab",
+        "environment": "pilot",
+        "pilotBudgetUsd": "200",
+        "role": "quick"
+      },
+      "properties": {
+        "defaultCpu": "1",
+        "defaultMemory": "2Gi",
+        "defaultDisk": "20Gi",
+        "maxSandboxCount": 501,
+        "defaultTimeoutSeconds": 600
+      }
+    },
+    {
+      "type": "Microsoft.App/sandboxGroups",
+      "apiVersion": "2026-02-01-preview",
+      "name": "lab-headless",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "tags": {
+        "application": "sandbox-lab",
+        "environment": "pilot",
+        "pilotBudgetUsd": "200",
+        "role": "headless"
+      },
+      "properties": {
+        "defaultCpu": "2",
+        "defaultMemory": "4Gi",
+        "defaultDisk": "40Gi",
+        "maxSandboxCount": 1000,
+        "defaultTimeoutSeconds": 3600
+      }
+    },
+    {
+      "type": "Microsoft.App/sandboxGroups",
+      "apiVersion": "2026-02-01-preview",
+      "name": "lab-developer",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "tags": {
+        "application": "sandbox-lab",
+        "environment": "pilot",
+        "pilotBudgetUsd": "200",
+        "role": "developer"
+      },
+      "properties": {
+        "defaultCpu": "4",
+        "defaultMemory": "8Gi",
+        "defaultDisk": "80Gi",
+        "maxSandboxCount": 1000,
+        "defaultTimeoutSeconds": 3600
+      }
+    }
+  ]
+}

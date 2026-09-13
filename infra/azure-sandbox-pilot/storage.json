@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "storageName": {"type": "string"},
+    "location": {"type": "string", "defaultValue": "eastus2"}
+  },
+  "resources": [{
+    "type": "Microsoft.Storage/storageAccounts",
+    "apiVersion": "2023-05-01",
+    "name": "[parameters('storageName')]",
+    "location": "[parameters('location')]",
+    "kind": "StorageV2",
+    "sku": {"name": "Standard_LRS"},
+    "tags": {"application": "sandbox-lab", "environment": "pilot", "billing": "usage-only"},
+    "properties": {
+      "accessTier": "Hot",
+      "supportsHttpsTrafficOnly": true,
+      "minimumTlsVersion": "TLS1_2",
+      "allowBlobPublicAccess": false,
+      "allowSharedKeyAccess": false,
+      "defaultToOAuthAuthentication": true,
+      "publicNetworkAccess": "Enabled"
+    },
+    "resources": [{
+      "type": "blobServices",
+      "apiVersion": "2023-05-01",
+      "name": "default",
+      "dependsOn": ["[resourceId('Microsoft.Storage/storageAccounts',parameters('storageName'))]"],
+      "properties": {
+        "isVersioningEnabled": true,
+        "deleteRetentionPolicy": {"enabled": true, "days": 7},
+        "containerDeleteRetentionPolicy": {"enabled": true, "days": 7}
+      },
+      "resources": [{
+        "type": "containers",
+        "apiVersion": "2023-05-01",
+        "name": "workspace-state",
+        "dependsOn": ["[resourceId('Microsoft.Storage/storageAccounts/blobServices',parameters('storageName'),'default')]"],
+        "properties": {"publicAccess": "None"}
+      }]
+    }, {
+      "type": "managementPolicies",
+      "apiVersion": "2023-05-01",
+      "name": "default",
+      "dependsOn": ["[resourceId('Microsoft.Storage/storageAccounts',parameters('storageName'))]"],
+      "properties": {"policy": {"rules": [{
+        "name": "expire-old-versions", "enabled": true, "type": "Lifecycle",
+        "definition": {
+          "filters": {"blobTypes": ["blockBlob"], "prefixMatch": ["workspace-state/"]},
+          "actions": {"version": {"delete": {"daysAfterCreationGreaterThan": 7}}}
+        }
+      }]}}
+    }]
+  }]
+}

@@ -1,4 +1,4 @@
-"""Operator-owned routing, shared by chat, the workspace gateway and Coder setup."""
+"""Operator-owned routing, shared by chat, the workspace gateway and Azure setup."""
 import os
 
 

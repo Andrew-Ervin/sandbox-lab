@@ -21,3 +21,12 @@ test('new conversation binds its server ID, while another conversation remains i
  await other.text();assert.equal(transport.busy('B'),false);
  await reader.cancel();assert.equal(transport.busy('A'),false);
 });
+test('navigation detaches a rebound stream and releases the UI without waiting for the job',async()=>{
+ const transport=new ChatTransport();let controller,canceled=false;
+ const response=await transport.send(async()=>new Response(new ReadableStream({start(c){controller=c;},cancel(){canceled=true;}})),'/',request());
+ const reader=response.body.getReader();controller.enqueue(new TextEncoder().encode('data: {"type":"thread.created","thread":{"id":"A"}}\n\n'));
+ await reader.read();
+ await transport.detach();
+ assert.equal(canceled,true);assert.equal(transport.busy('A'),false);
+ assert.equal((await reader.read()).done,true);
+});

@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: 'Sandbox Lab',
-  description: 'A local chat and Kubernetes coding sandbox.',
+  description: 'A local chat and Azure coding sandbox.',
 };
 
 export default function RootLayout({

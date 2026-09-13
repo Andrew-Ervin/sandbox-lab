@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "registryName": {"type": "string"},
+    "location": {"type": "string", "defaultValue": "eastus2"}
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ContainerRegistry/registries",
+      "apiVersion": "2023-07-01",
+      "name": "[parameters('registryName')]",
+      "location": "[parameters('location')]",
+      "sku": {"name": "Basic"},
+      "tags": {"application": "sandbox-lab", "environment": "pilot", "requiresFixedCostApproval": "true"},
+      "properties": {"adminUserEnabled": false, "publicNetworkAccess": "Enabled", "anonymousPullEnabled": false}
+    }
+  ]
+}

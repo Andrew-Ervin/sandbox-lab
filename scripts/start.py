@@ -1,14 +1,13 @@
-"""Run trusted local services; Ctrl-C stops them, leaving Kubernetes workspaces intact."""
-import os,signal,subprocess,time
+"""Run trusted local services; Ctrl-C stops them, leaving Azure workspace files intact."""
+import os,signal,subprocess,time,sys
 from pathlib import Path
 if os.name=='nt': raise SystemExit('Run the launcher in Ubuntu/WSL2; native Windows processes are not supported. See docs/LOCAL-SETUP.md')
 ROOT=Path(__file__).resolve().parents[1]
 os.chdir(ROOT)
 LOCAL=ROOT/'.local'; LOCAL.mkdir(exist_ok=True)
 PYTHON=str(ROOT/'.venv/bin/python')
-# Renew before serving requests; the watcher keeps long-running local sessions valid.
-subprocess.run([PYTHON,'scripts/broker_credentials.py'],check=True)
-commands={'broker-credentials':[PYTHON,'scripts/broker_credentials.py','--watch'],'coder-connections':[PYTHON,'scripts/forward_coder.py'],'backend':[PYTHON,'-m','uvicorn','backend.main:app','--host','127.0.0.1','--port','8787','--no-access-log'],'frontend':['npm','run','dev','--','--host','127.0.0.1','--port','3000']}
+sys.path.insert(0,str(ROOT))
+commands={'backend':[PYTHON,'-m','uvicorn','backend.main:app','--host','127.0.0.1','--port','8787','--no-access-log'],'frontend':['npm','run','dev','--','--host','127.0.0.1','--port','3000']}
 children={}; logs={}; stop=False
 
 def end(*_):
@@ -16,7 +15,7 @@ def end(*_):
     stop=True
 signal.signal(signal.SIGINT,end); signal.signal(signal.SIGTERM,end)
 try:
-    print('Chat: http://127.0.0.1:3000\nDeveloper portal: http://127.0.0.1:7080\nAI Coder portal: http://127.0.0.1:7081',flush=True)
+    print('Chat: http://127.0.0.1:3000\nCompute: '+'Azure Container Apps Sandboxes',flush=True)
     for name,command in commands.items():
         logs[name]=open(LOCAL/f'{name}.log','ab')
         children[name]=subprocess.Popen(command,stdout=logs[name],stderr=subprocess.STDOUT,start_new_session=True)

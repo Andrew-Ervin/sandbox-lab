@@ -14,11 +14,11 @@ from chatkit.types import TaskItem,CustomTask,WidgetItem,WidgetRootUpdated
 from chatkit.widgets import Card,Image,Button,Text
 from .config import API_KEY,MODEL,STATE,REASONING
 from .compute import compute
-from .coder import coder
+from .headless import headless
 from .previews import previews
 from .titles import Titles
 
-from .assistant_context import SYSTEM, TOOLS
+from .assistant_context import SYSTEM, TOOLS, runtime_system
 from .documentation import read_documentation
 from .experiments import experiment
 TOOLS = [*TOOLS, *experiment.TOOLS]
@@ -26,18 +26,36 @@ SYSTEM += experiment.INSTRUCTION
 class LabChat(ChatKitServer[dict]):
     def __init__(self,store):
         super().__init__(store); self.locks={}; self.http=None;self.titles=Titles(store,lambda *args,**kwargs:self.completion(*args,**kwargs))
-    async def completion(self,messages,tools=True,max_tokens=None,search=None):
+    async def completion(self,messages,tools=True,max_tokens=None,search=None,reasoning_effort=None,execution_tools=True,activity=None):
         if not API_KEY: raise RuntimeError('Set the server-side OpenRouter API key in .env')
-        body={'model':MODEL,'messages':messages,'max_tokens':max_tokens or value('CHAT_MAX_OUTPUT_TOKENS'),'reasoning':{'effort':REASONING},'provider':provider_policy()}
+        body={'model':MODEL,'messages':messages,'max_tokens':max_tokens or value('CHAT_MAX_OUTPUT_TOKENS'),'reasoning':{'effort':reasoning_effort or REASONING,'exclude':False,'summary':'detailed'},'provider':provider_policy()}
         available_tools=list(TOOLS) if tools else []
+        if not execution_tools:available_tools=[t for t in available_tools if t['function']['name'] not in ('run_python','delegate_project')]
+        elif execution_tools=='quick':available_tools=[t for t in available_tools if t['function']['name']!='delegate_project']
         search_tool=web_search_tool() if (tools if search is None else search) else None
         if search_tool:
             available_tools.append(search_tool)
             body['max_tool_calls']=search_tool['parameters']['max_uses']
         if available_tools:body['tools']=available_tools
         if self.http is None: self.http=httpx.AsyncClient(timeout=120,trust_env=False,limits=httpx.Limits(max_connections=32,max_keepalive_connections=8))
+        from .completion_validation import response_problem
         for attempt in range(value('CHAT_PROVIDER_ATTEMPTS')):
-            try:r=await self.http.post('https://openrouter.ai/api/v1/chat/completions',json=body,headers={'Authorization':'Bearer '+API_KEY,'X-Title':'Sandbox Lab'})
+            try:
+                from .runtime_provider import azure_enabled
+                charge=None;control=None
+                if azure_enabled():
+                    from .azure_runtime import runtime
+                    from .azure_services import model_reservation
+                    control=runtime();charge=control.budget.reserve('model',model_reservation(control,body)+(.10 if search_tool else 0))
+                try:
+                    headers={'Authorization':'Bearer '+API_KEY,'X-Title':'Sandbox Lab'}
+                    if activity is not None:
+                        from .model_stream import stream_response
+                        r=await stream_response(self.http,'https://openrouter.ai/api/v1/chat/completions',body,headers,activity)
+                    else:
+                        r=await self.http.post('https://openrouter.ai/api/v1/chat/completions',json=body,headers=headers)
+                finally:
+                    if charge:control.budget.finish(charge)
             except httpx.TransportError:
                 # No local tool has been dispatched from this response. A retry
                 # may incur another inference/search charge, but never replays
@@ -51,6 +69,18 @@ class LabChat(ChatKitServer[dict]):
             if (r.status_code in (429,502,503,504) or retry_code in (429,502,503,504)) and attempt+1<value('CHAT_PROVIDER_ATTEMPTS'):
                 await asyncio.sleep(min(8,2**attempt))
                 continue
+            if r.status_code < 400:
+                payload=r.json()
+                choices=payload.get('choices') or []
+                if choices and isinstance(choices[0].get('message'),dict):
+                    problem=response_problem(choices[0])
+                    if problem:
+                        # Nothing from this response has been dispatched. Retry
+                        # the inference, never partially execute malformed calls.
+                        if attempt+1<value('CHAT_PROVIDER_ATTEMPTS'):
+                            await asyncio.sleep(min(8,2**attempt))
+                            continue
+                        raise RuntimeError(problem+' No tools from that response were executed. Please retry with a smaller task.')
             break
         if r.status_code>=400: raise RuntimeError(f'OpenRouter returned {r.status_code}; check the key, model, and account credit.')
         data=r.json()
@@ -62,6 +92,49 @@ class LabChat(ChatKitServer[dict]):
             suffix=f' (code {code})' if isinstance(code,int) else ''
             raise RuntimeError('The model provider could not complete this response'+suffix+'. Please retry; your saved work is intact.')
         return choices[0]['message']
+    async def model_activity(self,thread,messages,**kwargs):
+        from chatkit.types import ThreadItemReplacedEvent,ThreadItemRemovedEvent
+        activity={};started=time.monotonic();created=datetime.now(timezone.utc)
+        item_id='thinking_'+uuid.uuid4().hex
+        def item(done=False):
+            return TaskItem(id=item_id,thread_id=thread.id,created_at=created,task=CustomTask(title='Thought' if done else 'Thinking',content=activity.get('reasoning') or None,status_indicator='complete' if done else 'loading'))
+        yield ThreadItemDoneEvent(item=item()),None
+        text_item=None;previous_text=''
+        task=asyncio.create_task(self.completion(messages,activity=activity,**kwargs))
+        try:
+            while not task.done():
+                try:await asyncio.wait_for(asyncio.shield(task),0.3)
+                except asyncio.TimeoutError:
+                    yield ThreadItemReplacedEvent(item=item()),None
+                    text=activity.get('answer','')
+                    if text and text!=previous_text:
+                        if text_item is None:
+                            text_item=self.message(thread,text)
+                            yield ThreadItemAddedEvent(item=text_item),None
+                        else:
+                            text_item.content=[AssistantMessageContent(text=text,annotations=[])]
+                            yield ThreadItemReplacedEvent(item=text_item),None
+                        previous_text=text
+            result=task.result()
+            if (activity.get("reasoning") or "").strip():
+                yield ThreadItemReplacedEvent(item=item(True)),None
+            else:
+                yield ThreadItemRemovedEvent(item_id=item_id),None
+            if result.get('content'):
+                final=self.message(thread,result['content'],result.get('annotations'))
+                if text_item:final.id=text_item.id
+                yield ThreadItemDoneEvent(item=final),None
+                result['_displayed']=True
+            yield None,result
+        except Exception:
+            failed=item(True);failed.task.title='Thinking interrupted'
+            yield ThreadItemReplacedEvent(item=failed),None
+            raise
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task,return_exceptions=True)
+
     async def close(self):
         await self.titles.close()
         if self.http: await self.http.aclose();self.http=None
@@ -102,7 +175,7 @@ class LabChat(ChatKitServer[dict]):
         if result:
             output=result.get('stdout') or result.get('summary') or ''
             content+='\n\nOutput:\n'+fenced(output[:24000])
-        return TaskItem(id='exec_'+run['id'],thread_id=thread.id,created_at=datetime.now(timezone.utc),task=CustomTask(title=('Python' if code else 'Coder Agent' if run.get('engine')=='coder-native' else 'Pi / Ori')+' · '+run['status'],content=content,status_indicator='complete' if result else 'loading'))
+        return TaskItem(id='exec_'+run['id'],thread_id=thread.id,created_at=datetime.now(timezone.utc),task=CustomTask(title=('Python' if code else 'Coding agent')+' · '+run['status'],content=content,status_indicator='complete' if result else 'loading'))
     def artifact_widget(self,thread,run,artifact):
         from .chat_cards import artifact_card,item
         return item(thread,artifact_card(run,artifact,STATE))
@@ -118,7 +191,7 @@ class LabChat(ChatKitServer[dict]):
         if getattr(self,'workspace_links',None):self.workspace_links.sync.request()
     async def _respond(self,thread,input,context):
         page=await self.store.load_thread_items(thread.id,after=None,limit=30,order='desc',context=context)
-        messages=[{'role':'system','content':SYSTEM}]
+        messages=[{'role':'system','content':runtime_system(SYSTEM)}]
         messages[0]['content']+=' Web search is '+('available through the server-side web search tool.' if web_search_tool() else 'disabled by the administrator. Do not claim to have searched the web.')
         messages[0]['content'] += experiment.thread_context(thread)
         available=self.store.files(thread.id)
@@ -147,24 +220,31 @@ class LabChat(ChatKitServer[dict]):
             # ChatKit detects the metadata change and emits a correctly typed thread event.
         mode=context.get('mode','auto')
         if mode=='quick': messages[0]['content']+=' The user explicitly selected quick compute. Only use run_python; explain if the task is too large.'
-        if thread.metadata.get('coder_workspace_id') and mode=='auto': messages[0]['content']+=' An existing persistent project is attached to this conversation. Delegate follow-up edits or analysis to it.'
+        if thread.metadata.get('workspace_id') and mode=='auto': messages[0]['content']+=' An existing persistent project is attached. Reuse it only for requested project work; answer unrelated questions normally without execution.'
         run=None
+        intent=None
+        allowed_execution=True
+        quick_escalation=False
+        intent_messages=list(messages)
         try:
             if mode in ['analysis','app']:
                 response={'role':'assistant','content':None,'tool_calls':[{'id':'call_'+uuid.uuid4().hex,'type':'function','function':{'name':'delegate_project','arguments':json.dumps({'task':user_text,'mode':mode,'input_files':[f['name'] for f in available if not f['name'].endswith(('.html','.png','.jpg'))][:value('ARTIFACT_MAX_FILES')]})}}]}
             else:
                 compute.policy.warm();compute.refill.set()
-                if not thread.metadata.get('coder_workspace_id'):coder.reserve.request()
-                yield ProgressUpdateEvent(text='Thinking…')
-                response=await self.completion(messages)
+                if not thread.metadata.get('workspace_id'):headless.reserve.request()
+                async for event,completed in self.model_activity(thread,messages):
+                    if event is not None:yield event
+                    if completed is not None:response=completed
             for step in range(4):
+                displayed=response.pop('_displayed',False)
                 calls=response.get('tool_calls') or []
-                if len(calls)>2: raise RuntimeError('The model requested too many parallel tools. Please retry with one task at a time.')
                 if not calls:
-                    text=response.get('content') or 'Done.'
-                    yield ThreadItemDoneEvent(item=self.message(thread,text,response.get('annotations'))); return
+                    text=response.get('content') or 'The model returned no answer. Please retry; no result was confirmed.'
+                    if not displayed:yield ThreadItemDoneEvent(item=self.message(thread,text,response.get('annotations')))
+                    return
                 messages.append(response)
-                for call in calls[:2]:
+                # Serialize tool requests; never drop calls or reject a valid batch.
+                for call in calls:
                     args=json.loads(call['function']['arguments']); name=call['function']['name']
                     if name=='read_documentation':
                         result=read_documentation(**args)
@@ -177,6 +257,14 @@ class LabChat(ChatKitServer[dict]):
                         continue
                     if name not in ('run_python','delegate_project'):raise RuntimeError('Unknown tool')
                     if name=='delegate_project' and mode=='quick': raise RuntimeError('Quick mode cannot provision a persistent project. Select Analysis or Auto.')
+                    from .execution_intent import execution_intent
+                    if intent is None:
+                        yield ProgressUpdateEvent(text='Selecting execution environment…')
+                        intent=await execution_intent(self.completion,intent_messages)
+                    if intent=='none' or (name=='delegate_project' and intent!='project' and not quick_escalation):
+                        allowed_execution='quick' if intent=='quick' else False
+                        messages.append({'role':'tool','tool_call_id':call['id'],'content':json.dumps({'status':'not_executed','reason':'This request does not need the proposed execution environment. Answer directly or use web search. Do not provision compute to retrieve online information. No workspace or run was created.'})})
+                        continue
                     selected='quick' if name=='run_python' else args.get('mode','analysis')
                     if selected not in ['quick','analysis','app']: raise RuntimeError('Invalid execution mode')
                     run={'id':'run_'+uuid.uuid4().hex,'thread_id':thread.id,'mode':selected,'status':'starting','summary':args.get('purpose',''),'artifacts':[],'code':args.get('code'),'task':args.get('task'),'model':MODEL,'reasoning':REASONING}
@@ -185,7 +273,7 @@ class LabChat(ChatKitServer[dict]):
                     yield ThreadItemDoneEvent(item=self.execution_item(thread,run))
                     yield ProgressUpdateEvent(text='Calculating…' if selected=='quick' else 'Working on your project…')
                     if name=='run_python': work=compute.quick(args['code'],run,self.store,args.get('input_files',[]))
-                    elif name=='delegate_project': work=coder.run(thread,args['task'],selected,run,self.store,context,args.get('input_files',[]))
+                    elif name=='delegate_project': work=headless.run(thread,args['task'],selected,run,self.store,context,args.get('input_files',[]))
                     else: raise RuntimeError('Unsupported tool')
                     task=asyncio.create_task(work)
                     trace_revision=None
@@ -202,6 +290,10 @@ class LabChat(ChatKitServer[dict]):
                         result=task.result()
                     finally:
                         if not task.done(): task.cancel(); await asyncio.gather(task,return_exceptions=True)
+                    if name=='run_python':
+                        from .execution_intent import needs_project
+                        quick_escalation=needs_project(result)
+                        if quick_escalation:allowed_execution=True
                     run['elapsed']=round(time.monotonic()-start,2)
                     run['status']='canceled' if result.get('canceled') else 'failed' if result.get('exit_code',0)!=0 else run.get('status') if run.get('status')=='needs_input' else 'completed'
                     links=await self.artifacts(run,result)
@@ -224,8 +316,9 @@ class LabChat(ChatKitServer[dict]):
                         yield ThreadItemDoneEvent(item=self.artifact_widget(thread,run,artifact))
                     result['saved_files']=[{'name':a['name'],'url':'http://127.0.0.1:3000'+a['url']} for a in links]
                     messages.append({'role':'tool','tool_call_id':call['id'],'content':json.dumps(result)[:20000]})
-                yield ProgressUpdateEvent(text='Preparing the result…')
-                response=await self.completion(messages,tools=step<2,search=True)
+                async for event,completed in self.model_activity(thread,messages,tools=step<2,search=True,execution_tools=allowed_execution):
+                    if event is not None:yield event
+                    if completed is not None:response=completed
             yield ThreadItemDoneEvent(item=self.message(thread,'Reached the per-message tool limit. Send a follow-up to continue.'))
         except asyncio.CancelledError:
             if run and run['status'] not in ('completed','canceled'):

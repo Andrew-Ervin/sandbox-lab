@@ -6,7 +6,7 @@ from pathlib import Path,PurePosixPath
 from fastapi import HTTPException,Request
 from chatkit.store import NotFoundError
 from chatkit.types import ThreadMetadata
-from .config import ROOT,STATE,CODER_URL
+from .config import ROOT,STATE
 
 
 def safe_path(value):
@@ -51,20 +51,20 @@ def write_mock_sync(project_id,payload,root=None):
 
 
 class ProjectFiles:
-    def __init__(self,store,coder):self.store=store;self.coder=coder
+    def __init__(self,store,headless):self.store=store;self.headless=headless
 
     async def workspace(self,project,owner,wake=False):
         if wake:
             rows=self.store.db.execute('SELECT thread FROM project_threads WHERE project=? LIMIT 1',(project['id'],)).fetchall()
             if not rows:raise HTTPException(409,'Start a conversation in this project first.')
             thread=await self.store.load_thread(rows[0][0],{'owner':owner})
-            ws=await self.coder.workspace(thread,self.store,{'owner':owner})
+            ws=await self.headless.workspace(thread,self.store,{'owner':owner})
         else:
             if not project['workspace_id']:raise HTTPException(409,'Open the project to start its workspace.')
-            ws=await self.coder.api('GET','/api/v2/workspaces/'+project['workspace_id'])
+            ws=await self.headless.api('GET','/api/v2/workspaces/'+project['workspace_id'])
             if ws.get('deleted') or ws['latest_build']['status']!='running':raise HTTPException(409,'Workspace is sleeping. Open workspace files to resume.')
-        if ws['template_id']!=self.coder.settings()['template_id']:raise HTTPException(403,'Headless template mismatch')
-        self.coder.touched[ws['id']]=time.time()
+        if ws['template_id']!=self.headless.settings()['template_id']:raise HTTPException(403,'Headless template mismatch')
+        self.headless.touched[ws['id']]=time.time()
         return ws
 
     async def read(self,workspace,action,path='',developer=None):
@@ -77,29 +77,16 @@ class ProjectFiles:
         return result
 
     async def invoke(self,workspace,script,payload,developer=None):
-        token=developer.token if developer else self.coder.settings()['token']
-        env=dict(os.environ,CODER_URL='http://127.0.0.1:7080' if developer else CODER_URL,CODER_SESSION_TOKEN=token,CODER_CONFIG_DIR=str(STATE/('coder-dev-transfer-cli' if developer else 'coder-service-cli')),CODER_USE_KEYRING='false')
-        proc=await asyncio.create_subprocess_exec(str(ROOT/'.local/bin/coder'),'ssh','--disable-autostart',workspace['name'],'--','python -I -c '+shlex.quote(script_with_limits(script)),env=env,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
-        async def bounded(stream,maximum):
-            data=bytearray()
-            while part:=await stream.read(65536):
-                data.extend(part)
-                if len(data)>maximum:raise ValueError('Project response exceeded size limit')
-            return data
-        try:
-            proc.stdin.write(json.dumps(payload).encode());await proc.stdin.drain();proc.stdin.close()
-            out,_=await asyncio.wait_for(asyncio.gather(bounded(proc.stdout,value('SYNC_MAX_TOTAL_BYTES')*2+value('SYNC_MAX_FILES')*2048),bounded(proc.stderr,32000)),60)
-            await proc.wait();result=json.loads(out)
-            if proc.returncode or result.get('error'):raise ValueError('Project path unavailable or export exceeds limits. Dependencies, credential files and symlinks are excluded.')
-            return result
-        finally:
-            if proc.returncode is None:proc.kill();await proc.wait()
+        adapter=developer or self.headless
+        result=json.loads(await adapter.invoke(workspace,script,payload,maximum=value('SYNC_MAX_TOTAL_BYTES')*2+value('SYNC_MAX_FILES')*2048))
+        if result.get('error'):raise ValueError('Project path unavailable or source transfer exceeds limits.')
+        return result
 
 
-def install_projects(app,store,coder,live_containers):
+def install_projects(app,store,headless,live_containers):
     from .project_actions import install_project_actions
-    deletions=install_project_actions(app,store,coder)
-    browser=ProjectFiles(store,coder)
+    deletions=install_project_actions(app,store,headless)
+    browser=ProjectFiles(store,headless)
     def owned(pid,request):
         try:
             project=store.get_project(pid,request.state.owner)
@@ -145,7 +132,7 @@ def install_projects(app,store,coder,live_containers):
 
     @app.post('/api/projects/{pid}/sync-onedrive')
     async def sync(pid:str,request:Request):
-        project=owned(pid,request);lock=coder.project_locks.setdefault(pid,asyncio.Lock())
+        project=owned(pid,request);lock=headless.project_locks.setdefault(pid,asyncio.Lock())
         if lock.locked():raise HTTPException(409,'This project is working. Sync after its coding run finishes.')
         async with lock:
             try:

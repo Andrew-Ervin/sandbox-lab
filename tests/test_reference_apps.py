@@ -30,7 +30,7 @@ async def test_static_app_is_owner_scoped_and_never_starts_workspace(tmp_path,mo
     opened=[]
     async def artifact(path):opened.append(path);return 'http://127.0.0.1:45678/'
     async def no_workspace(*args,**kwargs):raise AssertionError('Static app must not use a workspace')
-    monkeypatch.setattr(module.previews,'artifact',artifact);monkeypatch.setattr(module.coder,'api',no_workspace)
+    monkeypatch.setattr(module.previews,'artifact',artifact);monkeypatch.setattr(module.headless,'api',no_workspace)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=module.app),base_url='http://127.0.0.1:8787') as client:
         assert (await client.get('/api/app-preview/guide?resolve=1')).status_code==401
         await client.post('/api/bootstrap')

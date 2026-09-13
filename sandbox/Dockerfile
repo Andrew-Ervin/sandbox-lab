@@ -4,13 +4,20 @@ FROM rust:slim-bookworm@sha256:1469a27c125cb5a3aebfa4f4e4665d935b02fb72cc093b2c9
 FROM golang:bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b AS go
 FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:e1ffd2a92ae84c1291bc1b6887501f8af98e6331e7af6d4c8d37168c5e87a64c AS dotnet
 FROM julia:1-bookworm@sha256:709daad7eccdb0363b080df203601988cff8c6a9581162668b76804cca407888 AS julia
+FROM python:3.12-slim-bookworm AS scientific-build
+COPY --from=uv /uv /usr/local/bin/uv
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
+COPY sandbox/python/requirements.lock /opt/lab-python.lock
+RUN uv pip install --prefix /opt/science --no-cache --require-hashes --exclude-newer 2026-09-02 -r /opt/lab-python.lock
 FROM python:3.12-slim-bookworm AS base
 COPY --from=uv /uv /usr/local/bin/uv
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
-RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates tini procps chromium && rm -rf /var/lib/apt/lists/*
-RUN uv pip install --system --no-cache polars==1.34.0 numpy==2.3.3 scipy==1.16.2 scikit-learn==1.7.2 plotly==6.3.1 joblib==1.5.2 kaleido==1.1.0
+RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates tini procps chromium libgomp1 libcairo2 && rm -rf /var/lib/apt/lists/*
+COPY sandbox/python/requirements.lock /opt/lab-python.lock
+COPY --from=scientific-build /opt/science /usr/local
+ENV MPLCONFIGDIR=/tmp/matplotlib NUMBA_CACHE_DIR=/tmp/numba PYTENSOR_FLAGS=base_compiledir=/tmp/pytensor,compiledir=/tmp/pytensor/compiled
 RUN groupadd -g 1000 sandbox && useradd -m -u 1000 -g 1000 -s /bin/bash sandbox && mkdir -p /workspace /opt/lab && chown 1000:1000 /workspace
 ENV HOME=/home/sandbox PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 WORKDIR /workspace
@@ -56,3 +63,20 @@ COPY sandbox/checkpoint.py sandbox/collect.py sandbox/quick.py sandbox/plot_capt
 USER 1000:1000
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["sleep", "infinity"]
+
+# The same scientific baseline with an HTTP dispatcher for CustomContainer
+# Dynamic Sessions. The dispatcher drops child privileges to UID 1000.
+FROM quick AS sessions-python
+USER root
+COPY sandbox/python/session-compat.lock /opt/lab-session-compat.lock
+RUN uv pip install --system --no-cache --require-hashes --exclude-newer 2026-09-02 -r /opt/lab-session-compat.lock
+COPY sandbox/azure_execute.py sandbox/session_server.py /opt/lab/
+EXPOSE 8080
+CMD ["python", "/opt/lab/session_server.py"]
+
+# ADC executes a trusted root bootstrap and drops all workspace commands to
+# UID 1000. No cloud credentials, live state or generated project source is copied.
+FROM project AS azure-headless
+USER root
+FROM developer AS azure-developer
+USER root

@@ -53,6 +53,28 @@ def test_override_is_exact_expiring_and_go_uses_first_observation(gateway):
     p['overrides'][0]['expires']=time.time()-1;m.POLICY.write_text(json.dumps(p))
     assert not m.old_enough('go','example.com/module','v1.0.0',observed)
 
+
+@pytest.mark.asyncio
+async def test_npm_shrinkwrap_archives_keep_age_and_checksum_checks(gateway, monkeypatch):
+    import hashlib
+    m = gateway; content = b'approved archive'; calls = []
+    old = (datetime.now(timezone.utc)-timedelta(days=7)).isoformat()
+    async def metadata(url):
+        return {'versions': {v: {'dist': {'tarball': 'https://registry.npmjs.org/@scope/pkg/-/pkg-'+v+'.tgz',
+            'shasum': hashlib.sha1(content).hexdigest()}} for v in ('1.0.0', '2.0.0')},
+            'time': {'1.0.0': old, '2.0.0': datetime.now(timezone.utc).isoformat()}}
+    def upstream(request):
+        calls.append(str(request.url)); return httpx.Response(200, content=content)
+    monkeypatch.setattr(m, 'metadata', metadata)
+    monkeypatch.setattr(m, 'upstream_client', lambda: httpx.AsyncClient(transport=httpx.MockTransport(upstream)))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=m.app), base_url='http://gateway') as client:
+        assert (await client.get('/npm/@scope/pkg/-/pkg-2.0.0.tgz')).status_code == 403
+        assert (await client.get('/npm/@scope/pkg/-/foreign-1.0.0.tgz')).status_code == 403
+        assert calls == []
+        response = await client.get('/npm/@scope/pkg/-/pkg-1.0.0.tgz')
+        assert response.status_code == 200 and response.content == content
+        assert calls == ['https://registry.npmjs.org/@scope/pkg/-/pkg-1.0.0.tgz']
+
 @pytest.mark.asyncio
 async def test_unknown_upstream_is_never_fetched(gateway):
     for url in ['http://pypi.org/file','https://example.com/file','https://127.0.0.1/file','https://user:'+'password@pypi.org/file']:

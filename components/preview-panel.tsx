@@ -88,7 +88,7 @@ export function PreviewPanel({
                   )
                 }
               >
-                VS Code
+                Workspace
               </Button>
               <Button
                 size="sm"
@@ -150,7 +150,7 @@ export function PreviewPanel({
           sandbox={
             preview.ide
               ? 'allow-scripts allow-same-origin allow-forms allow-downloads allow-modals allow-pointer-lock'
-              : 'allow-scripts allow-forms allow-downloads'
+              : 'allow-scripts allow-same-origin allow-forms allow-downloads'
           }
           allow={
             preview.ide

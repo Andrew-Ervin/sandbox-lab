@@ -1,0 +1,105 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "image": {
+      "type": "string"
+    },
+    "registryServer": {
+      "type": "string"
+    },
+    "deleteAfter": {
+      "type": "string"
+    },
+    "environmentName": {
+      "type": "string",
+      "defaultValue": "lab-session-test"
+    }
+  },
+  "variables": {
+    "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities','lab-session-image-pull')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.App/sessionPools",
+      "apiVersion": "2025-07-01",
+      "name": "labpythoncustom",
+      "location": "eastus2",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[variables('identity')]": {}
+        }
+      },
+      "tags": {
+        "application": "sandbox-lab",
+        "requiresFixedCostApproval": "true",
+        "deleteAfter": "[parameters('deleteAfter')]",
+        "testAllowanceUsd": "5"
+      },
+      "properties": {
+        "containerType": "CustomContainer",
+        "poolManagementType": "Dynamic",
+        "environmentId": "[resourceId('Microsoft.App/managedEnvironments',parameters('environmentName'))]",
+        "scaleConfiguration": {
+          "maxConcurrentSessions": 2,
+          "readySessionInstances": 1
+        },
+        "dynamicPoolConfiguration": {
+          "lifecycleConfiguration": {
+            "lifecycleType": "Timed",
+            "cooldownPeriodInSeconds": 300
+          }
+        },
+        "sessionNetworkConfiguration": {
+          "status": "EgressDisabled"
+        },
+        "managedIdentitySettings": [
+          {
+            "identity": "[variables('identity')]",
+            "lifecycle": "None"
+          }
+        ],
+        "customContainerTemplate": {
+          "containers": [
+            {
+              "name": "python",
+              "image": "[parameters('image')]",
+              "resources": {
+                "cpu": 1,
+                "memory": "2Gi"
+              },
+              "probes": [
+                {
+                  "type": "Startup",
+                  "httpGet": {
+                    "path": "/ready",
+                    "port": 8080
+                  },
+                  "periodSeconds": 5,
+                  "failureThreshold": 30
+                },
+                {
+                  "type": "Liveness",
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "periodSeconds": 10,
+                  "failureThreshold": 3
+                }
+              ]
+            }
+          ],
+          "ingress": {
+            "targetPort": 8080
+          },
+          "registryCredentials": {
+            "server": "[parameters('registryServer')]",
+            "identity": "[variables('identity')]"
+          }
+        }
+      }
+    }
+  ]
+}

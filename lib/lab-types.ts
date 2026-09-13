@@ -18,11 +18,14 @@ export type Run = {
   artifacts?: { name: string; url: string }[];
 };
 export type Workspace = {
+  last_used_at?: number;
+  compute_size?: string;
+  suggested_name?: string;
   source_path?: string;
   project_id?: string | null;
   project_name?: string | null;
   observed_at?: number;
-  coder_status?: string;
+  provider_status?: string;
   id: string;
   name: string;
   status: string;

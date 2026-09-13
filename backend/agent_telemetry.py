@@ -1,4 +1,4 @@
-"""Bounded, provider-supplied activity for native Coder runs; no host environment."""
+"""Bounded, provider-supplied activity for native Azure runs; no host environment."""
 import json
 from .limits import value
 from .markdown import fenced

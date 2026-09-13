@@ -1,0 +1,36 @@
+{
+  "extensions": [
+    {
+      "id": "anthropic.claude-code",
+      "publisher": "Anthropic",
+      "name": "claude-code",
+      "displayName": "Claude Code for VS Code",
+      "description": "Claude Code for VS Code: Harness the power of Claude Code without leaving your IDE",
+      "version": "2.1.258",
+      "published": "2026-09-01T22:35:03.428300Z",
+      "platform": "linux-x64",
+      "engine": "^1.94.0",
+      "url": "https://open-vsx.org/api/Anthropic/claude-code/linux-x64/2.1.258/file/Anthropic.claude-code-2.1.258@linux-x64.vsix",
+      "sha256": "788241ddca771de0f90c672bfe6a78923918fe0305a7da1a9bc70629e29238c7",
+      "file": "claude-code.vsix",
+      "icon": "resources/claude-logo.png",
+      "license": "\u00a9 Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance."
+    },
+    {
+      "id": "openai.chatgpt",
+      "publisher": "openai",
+      "name": "chatgpt",
+      "displayName": "Codex \u2013 OpenAI\u2019s coding agent",
+      "description": "Codex is a coding agent that works with you everywhere you code \u2014 included in ChatGPT Plus, Pro, Business, Edu, and Enterprise plans.",
+      "version": "26.5825.51511",
+      "published": "2026-08-30T01:11:26.639440Z",
+      "platform": "linux-x64",
+      "engine": "^1.96.2",
+      "url": "https://open-vsx.org/api/openai/chatgpt/linux-x64/26.5825.51511/file/openai.chatgpt-26.5825.51511@linux-x64.vsix",
+      "sha256": "557e8059809647893bf5fc86fba1515528c1611afe31d56279266c2fcde2a204",
+      "file": "chatgpt.vsix",
+      "icon": "resources/blossom.dark.png",
+      "license": "SEE LICENSE IN LICENSE.md"
+    }
+  ]
+}

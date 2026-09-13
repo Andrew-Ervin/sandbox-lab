@@ -75,7 +75,7 @@ export function WorkspaceSync({
           <Monitor size={19} />
           <span>
             <strong>{project.developer_name || 'Developer workstation'}</strong>
-            <small>VS Code · separate packages and processes</small>
+            <small>Workspace files</small>
           </span>
           <StatePill state={project.developer_status || 'unknown'} />
         </div>
@@ -123,7 +123,7 @@ export function WorkspaceSync({
               disabled={!!resolving}
               onClick={() => void resolve(path, 'developer')}
             >
-              Keep VS Code
+              Keep workspace
             </Button>
           </div>
         </div>
@@ -253,7 +253,7 @@ export function OpenProjectWorkspace({
   return (
     <section className="project-workstation-entry">
       <div>
-        <strong>Work on this project in VS Code</strong>
+        <strong>Open this project in your workspace</strong>
         <p>
           Your source opens automatically in a separate developer workstation.
         </p>

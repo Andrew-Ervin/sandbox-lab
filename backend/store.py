@@ -37,14 +37,14 @@ class SQLiteStore(ProjectStore, Store[dict]):
                 for key in ('title_version','title_source','title_pending'):thread.metadata[key]=current['metadata'].get(key)
         with self.db:
             self.apply_project_metadata(thread,context['owner'])
-            self.db.execute('INSERT INTO threads VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body,updated=excluded.updated',(thread.id,context['owner'],thread.model_dump_json(),datetime.now().timestamp()))
+            self.db.execute('INSERT INTO threads VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body',(thread.id,context['owner'],thread.model_dump_json(),datetime.now().timestamp()))
     def _page(self, values, after, limit):
         if after:
             ids=[v.id for v in values]
             if after not in ids: raise NotFoundError('Cursor not found')
             values=values[ids.index(after)+1:]
         data=values[:limit]
-        return Page(data=data,has_more=len(values)>limit,after=data[-1].id if len(values)>limit and data else None)
+        return Page[ThreadMetadata](data=data,has_more=len(values)>limit,after=data[-1].id if len(values)>limit and data else None)
     async def load_threads(self, limit, after, order, context):
         rows=self.db.execute('SELECT t.body FROM threads t LEFT JOIN thread_preferences a ON a.thread=t.id LEFT JOIN project_threads m ON m.thread=t.id LEFT JOIN projects p ON p.id=m.project WHERE t.owner=? AND COALESCE(a.archived,0)=0 AND COALESCE(p.archived,0)=0 AND COALESCE(p.deleting,0)=0 ORDER BY t.updated '+('ASC' if order=='asc' else 'DESC'),(context['owner'],)).fetchall()
         return self._page([ThreadMetadata.model_validate_json(r[0]) for r in rows],after,limit)
@@ -61,7 +61,9 @@ class SQLiteStore(ProjectStore, Store[dict]):
             cursor=' AND seq '+('>' if order=='asc' else '<')+' ?';params.append(row[0])
         rows=self.db.execute('SELECT body FROM items WHERE thread=?'+cursor+' ORDER BY seq '+('ASC' if order=='asc' else 'DESC')+' LIMIT ?',(*params,limit+1)).fetchall()
         data=[ITEM.validate_json(r[0]) for r in rows[:limit]]
-        return Page(data=data,has_more=len(rows)>limit,after=data[-1].id if len(rows)>limit and data else None)
+        # A concrete union gives Pydantic the complete serializer even when
+        # stored items were validated before their classes were instantiated.
+        return Page[ThreadItem](data=data,has_more=len(rows)>limit,after=data[-1].id if len(rows)>limit and data else None)
     async def add_thread_item(self, thread_id, item, context): await self.save_item(thread_id,item,context)
     async def save_item(self, thread_id, item, context):
         await self.load_thread(thread_id,context)

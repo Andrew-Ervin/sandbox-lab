@@ -27,7 +27,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${e.cspSource} 'unsafe-inline'; script-src 'nonce-${s}'; img-src ${e.cspSource} data:; font-src ${e.cspSource};">
-  <link rel="stylesheet" href="${t}">
+  <!-- LAB_INLINE_WEBVIEW --><style>${pe.readFileSync(ke.join(this.extensionUri.fsPath,"media","style.css"),"utf8").replace(/<\/style/gi,"<\\/style")}</style>
   <title>Pi Chat</title>
 </head>
 <body>
@@ -102,8 +102,8 @@
     </div>
   </div>
 
-  <script nonce="${s}" src="${r}"></script>
-  <script nonce="${s}" src="${n}"></script>
+  <script nonce="${s}">${pe.readFileSync(ke.join(this.extensionUri.fsPath,"media","vendor.js"),"utf8").replace(/<\/script/gi,"<\\/script")}</script>
+  <script nonce="${s}">${pe.readFileSync(ke.join(this.extensionUri.fsPath,"media","main.js"),"utf8").replace(/<\/script/gi,"<\\/script")}</script>
 </body>
 </html>`}};function Zn(){let i="",e="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";for(let t=0;t<64;t++)i+=e.charAt(Math.floor(Math.random()*e.length));return i}var $e=class{constructor(){this.contents=new Map}set(e,t){this.contents.set(e.toString(),t)}provideTextDocumentContent(e){return this.contents.get(e.toString())??""}};var X=F(require("vscode"),1),Ce=class{constructor(){this.snapshots=new Map;this.edits=new Map;this.onDidChangeEdits=new X.EventEmitter;this.onDidChange=this.onDidChangeEdits.event}async snapshotWorkspace(){this.snapshots.clear();for(let e of X.workspace.textDocuments)if(e.uri.scheme==="file"&&!e.isUntitled)try{let t=e.getText();this.snapshots.set(e.uri.fsPath,t)}catch{}}async ensureSnapshot(e){if(this.snapshots.has(e))return this.snapshots.get(e);try{let t=X.Uri.file(e),n=Buffer.from(await X.workspace.fs.readFile(t)).toString("utf8");return this.snapshots.set(e,n),n}catch{return null}}async recordEdit(e,t,n){let r=await this.ensureSnapshot(e);if(r===null)throw new Error(`Cannot snapshot file: ${e}`);let s={id:`edit-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,filePath:e,originalContent:r,newContent:t,diff:n,timestamp:Date.now(),status:"pending"};return this.edits.set(s.id,s),this.onDidChangeEdits.fire(s),s}async revertEdit(e){let t=this.edits.get(e);if(!t||t.status!=="pending")return!1;try{let n=X.Uri.file(t.filePath);return await X.workspace.fs.writeFile(n,Buffer.from(t.originalContent,"utf8")),t.status="reverted",this.onDidChangeEdits.fire(t),!0}catch(n){return console.error(`[pi] revert failed for ${t.filePath}:`,n),!1}}acceptEdit(e){let t=this.edits.get(e);!t||t.status!=="pending"||(t.status="accepted",this.onDidChangeEdits.fire(t))}getEdit(e){return this.edits.get(e)}getPendingEdits(){return Array.from(this.edits.values()).filter(e=>e.status==="pending")}getAllEdits(){return Array.from(this.edits.values())}clear(){this.snapshots.clear(),this.edits.clear()}static computeDiff(e,t){let n=e.split(`
 `),r=t.split(`
@@ -122,7 +122,7 @@ async function labTranscribeAudio(message,sidebar){
  try{
   if(typeof message.data!=='string'||message.data.length>Math.ceil(LAB_VOICE_BYTES/3)*4||message.format!=='wav')throw Error('Invalid or oversized recording.');
   const token=require('node:fs').readFileSync(require('node:path').join(require('node:os').homedir(),'.config/lab/token'),'utf8').trim();
-  const response=await fetch('http://model-gateway.lab-control.svc.cluster.local:8080/v1/audio/transcriptions',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({data:message.data,format:message.format}),signal:AbortSignal.timeout(90000)});
+  const response=await fetch('http://127.0.0.1:8080/v1/audio/transcriptions',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({data:message.data,format:message.format}),signal:AbortSignal.timeout(90000)});
   const result=await response.json();
   if(!response.ok)throw Error(result.error?.message||'Transcription unavailable.');
   sidebar.postMessage({type:'dictationResult',id:message.id,text:result.text});

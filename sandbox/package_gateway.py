@@ -17,7 +17,9 @@ async def lifespan(app):
     yield
 
 app=FastAPI(docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)
-BASE='http://package-proxy.lab-control.svc.cluster.local:3128'
+from sandbox.editor_gallery import router as editor_gallery
+app.include_router(editor_gallery)
+BASE='http://127.0.0.1:3128'
 CACHE=Path(os.getenv('PACKAGE_CACHE','/cache'));POLICY=Path(os.getenv('PACKAGE_POLICY','/policy/packages.json'))
 MAX_BYTES=250_000_000  # Approved limit for large coding-harness artifacts.
 class ArtifactCatalog(MutableMapping):
@@ -109,7 +111,8 @@ def register(url,digest,eco,name,version,published,algorithm='sha256'):
     return BASE+'/artifact/'+ident
 @app.middleware('http')
 async def readonly(request,call_next):
-    if request.method not in ['GET','HEAD'] or request.url.query or request.headers.get('authorization') or request.headers.get('cookie'):
+    gallery_query=request.method=='POST' and request.url.path=='/vscode/gallery/extensionquery'
+    if (request.method not in ['GET','HEAD'] and not gallery_query) or request.url.query or request.headers.get('authorization') or request.headers.get('cookie'):
         return Response('Only approved package reads are permitted',status_code=403)
     response=await call_next(request);save_catalog();response.headers['X-Content-Type-Options']='nosniff';return response
 @app.get('/healthz')
@@ -260,7 +263,20 @@ async def npm_data(name):
         if stable:result['dist-tags']['latest']=max(stable,key=lambda v:tuple(int(x) for x in v.split('.')))
     result['time']={v:data['time'][v] for v in versions};return result
 @app.get('/npm/{name:path}')
-async def npm(name):return await npm_data(name)
+async def npm(name):
+    # npm can rewrite a published shrinkwrap's registry tarball URL onto the
+    # configured registry. Resolve that form through our filtered metadata and
+    # checksum catalog, never by proxying its path onto an upstream hostname.
+    if '/-/' in name:
+        package, filename = name.rsplit('/-/', 1)
+        data = await npm_data(package)
+        base = package.rsplit('/', 1)[-1]
+        for version, item in data['versions'].items():
+            if filename == base+'-'+version+'.tgz':
+                ident = urlsplit(item['dist']['tarball']).path.rsplit('/', 1)[-1]
+                return await artifact(ident)
+        raise HTTPException(403, 'Package archive version is unavailable under the release-age policy')
+    return await npm_data(name)
 
 async def crate_versions(name):
     allowed('cargo',name);data=await metadata('https://crates.io/api/v1/crates/'+quote(name))

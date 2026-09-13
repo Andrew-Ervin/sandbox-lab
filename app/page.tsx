@@ -1,4 +1,6 @@
 'use client';
+import {AzureRuntimePanel} from '@/components/azure-runtime-panel';
+import { OperationsPanel } from '@/components/operations-panel';
 import {
   useCallback,
   useEffect,
@@ -17,6 +19,8 @@ import {
   X,
   Plus,
   ShieldCheck,
+  ChartNoAxesCombined,
+  Settings2,
   AppWindow,
   FolderOpen,
   LoaderCircle,
@@ -98,11 +102,13 @@ type Container = {
   pool_state?: string;
 };
 type Status = {
+  runtime_health?: { available_bytes?: number; total_bytes?: number; error?: string };
   project_reserve?: {
     state: string;
     target: number;
     idle_seconds: number;
     claims: number;
+    always_on?: boolean;
     error?: string;
   };
   containers?: {
@@ -115,9 +121,10 @@ type Status = {
     developer_seconds: number;
     error?: string;
   };
-  kubernetes: boolean;
+  provider?: 'azure';
+  azure?: boolean;
   openrouter: boolean;
-  coder: boolean;
+  headless: boolean;
   warm_pods: number;
   model: string;
   reasoning: string;
@@ -127,6 +134,8 @@ type Status = {
     executing: number;
     ready: number;
     target_reserve: number;
+    minimum_reserve?: number;
+    error?: string;
     max_concurrency: number;
     max_pods: number;
     idle_seconds: number;
@@ -144,7 +153,7 @@ const modes = {
   analysis: 'Analysis',
   app: 'Build an app',
 };
-type Boot = { csrf: string; domain_key: string };
+type Boot = { csrf: string; domain_key: string; user?: {id:string;name:string;admin:boolean}; auth?:string; signin_required?:boolean; login_url?:string };
 
 export default function Home() {
   const [boot, setBoot] = useState<Boot | null>(null);
@@ -156,12 +165,12 @@ export default function Home() {
     script.async = true;
     script.onerror = () =>
       setError(
-        'ChatKit could not load. Check your internet connection and reload.',
+        'Chat could not load. Check your connection and reload.',
       );
     document.head.appendChild(script);
     fetch('/api/bootstrap', { method: 'POST' })
       .then((r) => {
-        if (!r.ok) throw Error('The local server is not ready.');
+        if (!r.ok && r.status!==401) throw Error('Could not connect. Please retry.');
         return r.json() as Promise<Boot>;
       })
       .then(setBoot)
@@ -170,13 +179,14 @@ export default function Home() {
       script.remove();
     };
   }, []);
+  if(boot?.signin_required)return <div className="connecting"><Box size={30}/><h1>Welcome back</h1><p>Sign in to open your chats, projects and workspaces.</p><Button onClick={()=>window.location.assign(boot.login_url||'/api/auth/login')}>Sign in with Microsoft</Button></div>;
   return boot ? (
     <Lab boot={boot} loadError={error} />
   ) : (
     <div className="connecting">
       <Box size={30} />
       <h1>Sandbox Lab</h1>
-      <p>{error || 'Connecting to your local lab…'}</p>
+      <p>{error || 'Connecting…'}</p>
       {error && <Button onClick={() => location.reload()}>Reconnect</Button>}
     </div>
   );
@@ -186,6 +196,12 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
   const panes = usePaneLayout();
   const { openPreview: showPreviewPane } = panes;
   const [chatReady, setChatReady] = useState(false);
+  const [chatSlow, setChatSlow] = useState(false);
+  useEffect(() => {
+    if (chatReady) { setChatSlow(false); return; }
+    const timer = window.setTimeout(() => setChatSlow(true), 30000);
+    return () => window.clearTimeout(timer);
+  }, [chatReady]);
   const [threadLoading, setThreadLoading] = useState(false);
   const transport = useRef(new ChatTransport());
   const loadedThread = useRef<string | null>(null);
@@ -208,6 +224,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
               .catch(() => null)) as { detail?: string } | null)
           : null;
       const staleCsrf = rejection?.detail === 'Invalid CSRF token';
+      if(response.status===401 && boot.auth==='entra'){window.location.assign('/');throw Error('Please sign in again.');}
       if (response.status === 401 || staleCsrf) {
         renewing.current ??= fetch('/api/bootstrap', { method: 'POST' })
           .then(async (r) => {
@@ -229,7 +246,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
   const [status, setStatus] = useState<Status | null>(null);
   const [inspect, setInspect] = useState(false);
   const [view, setView] = useState<
-    'chat' | 'apps' | 'dev' | 'files' | 'policy' | 'projects'
+    'chat' | 'apps' | 'dev' | 'files' | 'policy' | 'projects' | 'operations' | 'azure-runtime'
   >('chat');
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
@@ -247,7 +264,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
   useEffect(() => {
     try {
       const saved = JSON.parse(
-        localStorage.getItem('lab-panel-widths') || '{}',
+        localStorage.getItem('lab-panel-widths:'+boot.user?.id) || '{}',
       );
       if (Number.isFinite(saved.history))
         setHistoryWidth(Math.max(220, Math.min(420, saved.history)));
@@ -260,7 +277,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
     if (widthsLoaded)
       try {
         localStorage.setItem(
-          'lab-panel-widths',
+          'lab-panel-widths:'+boot.user?.id,
           JSON.stringify({ history: historyWidth, preview: previewWidth }),
         );
       } catch {}
@@ -277,6 +294,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
   const filesRequest = useRef(0);
   const [projectId, setProjectId] = useState<string | null>(null);
   const streaming = useRef(false);
+  const threadSelection = useRef(0);
   const threadRef = useRef(thread);
   threadRef.current = thread;
   const [error, setError] = useState('');
@@ -516,14 +534,14 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
       },
     },
   );
-  const startWorkspace = async (name: string) => {
+  const startWorkspace = async (name: string, compute_size='balanced') => {
     setStarting(true);
     setError('');
     try {
       const response = await sessionFetch('/api/developer/workspaces', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, compute_size }),
       });
       const result = (await response.json()) as { detail?: string };
       if (!response.ok) throw Error(result.detail);
@@ -656,7 +674,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
       attachments: { enabled: false },
     },
     disclaimer: {
-      text: 'Local security lab · Check generated code and results.',
+      text: 'Chats and files are saved to your account.',
     },
     onDeeplink: ({ name }) => {
       const match = /^app-(run_[a-f0-9]{32})$/.exec(name);
@@ -704,7 +722,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
   });
   usePolling(
     async () => {
-      if (streaming.current || transport.current.pending.size) return;
+      if (streaming.current || transport.current.busy(thread)) return;
       const job = status?.jobs.find((j) => j.thread_id === thread);
       if (!job) return;
       const key = job.id + ':' + job.status;
@@ -720,6 +738,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
     { enabled: Boolean(thread) && view === 'chat' },
   );
   const selectThread = (id: string | null) => {
+    const selection = ++threadSelection.current;
     filesRequest.current++;
     setFiles([]);
     setProjectId(null);
@@ -728,7 +747,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
     setView('chat');
     setPreview(null);
     setThread(id);
-    void chat.setThreadId(id).catch((e: Error) => setError(e.message));
+    void transport.current.detach().then(() => {if (selection === threadSelection.current) return chat.setThreadId(id);}).catch((e: Error) => {setThreadLoading(false);setError(e.message);});
   };
   const openProject = (id: string | null) => {
     setSelectedProject(id);
@@ -742,9 +761,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
       (j) => j.thread_id === id && ['running', 'queued'].includes(j.status),
     );
   const activeJob = active(thread);
-  const orderedThreads = [...threads].sort(
-    (a, b) => Number(b.id === thread) - Number(a.id === thread),
-  );
+  const orderedThreads = threads;
   const appRuns = (status?.apps || status?.runs || []).filter(
     (r, i, all) =>
       r.preview_url &&
@@ -894,7 +911,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                   }}
                 >
                   <Monitor size={17} />
-                  <span>Developer workspaces</span>
+                  <span>Workspaces</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
@@ -909,7 +926,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                   <span>Conversation files</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
-              <SidebarMenuItem>
+              {boot.user?.admin!==false && <SidebarMenuItem>
                 <SidebarMenuButton
                   isActive={view === 'policy'}
                   onClick={() => {
@@ -920,7 +937,9 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                   <ShieldCheck size={17} />
                   <span>Network & packages</span>
                 </SidebarMenuButton>
-              </SidebarMenuItem>
+              </SidebarMenuItem>}
+              {boot.user?.admin!==false && <SidebarMenuItem><SidebarMenuButton isActive={view === 'operations'} onClick={() => {setView('operations');setPreview(null);}}><ChartNoAxesCombined size={17}/><span>Operations</span></SidebarMenuButton></SidebarMenuItem>}
+              {boot.user?.admin!==false && <SidebarMenuItem><SidebarMenuButton isActive={view === 'azure-runtime'} onClick={() => {setView('azure-runtime');setPreview(null);}}><Settings2 size={17}/><span>{'Compute & storage'}</span></SidebarMenuButton></SidebarMenuItem>}
             </SidebarMenu>
             <ProjectSidebar
               projects={projects}
@@ -953,22 +972,23 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
             )}
           </SidebarContent>
           <SidebarFooter className="p-4">
-            <Button
+            {boot.user?.admin!==false && <Button
               variant="ghost"
               className="justify-start"
               onClick={() => setInspect(true)}
             >
               <ShieldCheck size={18} /> Lab status{' '}
               <span
-                className={`status-dot ${status?.kubernetes ? 'online' : ''}`}
+                className={`status-dot ${status?.azure ? 'online' : ''}`}
               />
-            </Button>
+            </Button>}
             <div className="profile">
-              <span className="avatar">L</span>
+              <span className="avatar">{(boot.user?.name||'A').slice(0,1)}</span>
               <div>
-                Local workspace<small>OpenRouter · Kubernetes</small>
+                {boot.user?.name||'My account'}<small>{boot.auth==='entra'?'Signed in':'Local account'}</small>
               </div>
             </div>
+            {boot.auth==='entra'&&<Button variant="ghost" onClick={async()=>{await sessionFetch('/api/auth/logout',{method:'POST'});window.location.assign('/')}}>Sign out</Button>}
           </SidebarFooter>
           <HistoryResize
             value={historyWidth}
@@ -1084,6 +1104,8 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                 />
               </Suspense>
             )}
+            {view === 'azure-runtime' && <AzureRuntimePanel sessionFetch={sessionFetch}/>}
+            {view === 'operations' && <OperationsPanel provider={status?.provider} sessionFetch={sessionFetch}/>}
             {view === 'policy' && (
               <Suspense fallback={<PanelLoading />}>
                 <PackagePolicy sessionFetch={sessionFetch} />
@@ -1110,8 +1132,12 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                       <LoaderCircle size={14} className="spin" />
                       {threadLoading
                         ? 'Loading conversation…'
-                        : 'Preparing chat…'}
+                        : chatSlow ? 'Chat did not finish loading.' : 'Preparing chat…'}
                     </p>
+                    {chatSlow && !threadLoading && <div className="space-y-3 text-sm text-muted-foreground">
+                      <p>The chat service may be unavailable or blocked by the browser. Your saved chats are retained; Apps, workspaces and Operations remain available.</p>
+                      <Button variant="outline" onClick={() => location.reload()}>Reload chat</Button>
+                    </div>}
                   </div>
                 )}
                 <ChatKit
@@ -1168,7 +1194,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                   name={workspaceName}
                   setName={setWorkspaceName}
                   starting={starting}
-                  onStart={() => startWorkspace(workspaceName)}
+                  onStart={(size) => startWorkspace(workspaceName,size)}
                   onOpen={(ws) =>
                     openPreview(
                       ws.project_name || ws.name,
@@ -1203,7 +1229,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                       );
                       if (!r.ok)
                         throw Error(
-                          'Could not refresh Pi. Retry after the workspace is ready.',
+                          'Could not refresh coding tools. Retry after the workspace is ready.',
                         );
                       setWorkspaces(
                         await api<Workspace[]>('/api/developer/workspaces'),
@@ -1256,9 +1282,9 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
             <div className="inspect-body">
               {(
                 [
-                  ['Kubernetes', status?.kubernetes],
-                  ['OpenRouter configured', status?.openrouter],
-                  ['Coder', status?.coder],
+                  ['Workspace service', status?.provider==='azure'?status?.azure:status?.azure],
+                  ['Chat connection', status?.openrouter],
+                  ['Broker coding', status?.provider==='azure'?status?.azure:status?.headless],
                 ] as const
               ).map(([name, ready]) => (
                 <div className="health-row" key={name}>
@@ -1269,7 +1295,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                 </div>
               ))}
               <p className="detail-note">
-                {status?.warm_pods || 0} quick pods ready · {status?.model} ·{' '}
+                {status?.provider==='azure'?'Quick compute on demand':`${status?.warm_pods || 0} quick pods ready`} · {status?.model} ·{' '}
                 {status?.reasoning}
               </p>
               {status?.pool && (
@@ -1277,8 +1303,8 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                   <strong>
                     {status.pool.ready
                       ? `${status.pool.ready} quick pods ready`
-                      : status.pool.executing || status.pool.queued
-                        ? 'Scaling for demand'
+                      : status.pool.target_reserve || status.pool.executing || status.pool.queued
+                        ? 'Preparing healthy quick compute'
                         : 'Quick compute asleep'}
                   </strong>
                   <p>
@@ -1286,10 +1312,12 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                     queued · warm target {status.pool.target_reserve}
                   </p>
                   <p>
-                    Up to {status.pool.max_concurrency} local executions · idle
-                    to zero after {status.pool.idle_seconds}s
+                    Up to {status.pool.max_concurrency} executions · {status.pool.minimum_reserve
+                      ? `keeps ${status.pool.minimum_reserve} clean spares ready`
+                      : `idle to zero after ${status.pool.idle_seconds}s`}
                   </p>
-                  <Button
+                  {status.pool.error && <p role="alert">{status.pool.error}</p>}
+                  {status?.provider!=='azure'&&<Button
                     size="sm"
                     variant="secondary"
                     onClick={async () => {
@@ -1300,7 +1328,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                     }}
                   >
                     Warm quick compute
-                  </Button>
+                  </Button>}
                 </div>
               )}
               <div className="mode-explanation">
@@ -1312,7 +1340,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                 </p>
                 <h3>Quick Python</h3>
                 <p>
-                  Clean single-use pods, conversation-owned files, no network. A
+                  Clean single-use {status?.provider==='azure'?'sandboxes':'pods'}, conversation-owned files, no network. A
                   missing package requires an explicit delegate_project tool
                   call from the AI.
                 </p>
@@ -1324,7 +1352,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                 </p>
                 <h3>Developer workspaces</h3>
                 <p>
-                  Separate Coder workspaces with VS Code and Pi through Ori as
+                  Separate workspaces with your editor and coding tools as
                   the default agent. Independent of chat.
                 </p>
               </div>
@@ -1335,8 +1363,9 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                   </strong>
                   <p>
                     Target {status.project_reserve.target} · claims{' '}
-                    {status.project_reserve.claims} · idle to zero after{' '}
-                    {status.project_reserve.idle_seconds}s
+                    {status.project_reserve.claims} · {status.project_reserve.always_on
+                      ? 'kept warm while capacity is available'
+                      : `idle to zero after ${status.project_reserve.idle_seconds}s`}
                   </p>
                   <p>
                     No conversation files or model allowance until the AI hands
@@ -1348,6 +1377,10 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                 </div>
               )}
               <h3 className="runs-heading">Live containers</h3>
+              {status?.runtime_health?.error && <p role="alert">{status.runtime_health.error}</p>}
+              {status?.runtime_health?.available_bytes != null && (
+                <p className="detail-note">Container disk: {(status.runtime_health.available_bytes / 1024 ** 3).toFixed(1)} GiB available.</p>
+              )}
               <p className="detail-note">
                 {statusStale
                   ? 'Status unavailable — last successful snapshot below'

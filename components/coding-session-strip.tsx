@@ -21,7 +21,7 @@ const labels: Record<string, string> = {
   stop_failed: 'Workspace stop needs retry',
 };
 
-/** Coder outlives a lost chat response. Observe it without extending idle time. */
+/** Azure outlives a lost chat response. Observe it without extending idle time. */
 export function CodingSessionStrip({
   thread,
   sessionFetch,
@@ -84,7 +84,7 @@ export function CodingSessionStrip({
         )}
         <span>
           {session
-            ? labels[session.status] || `Coder · ${session.status}`
+            ? labels[session.status] || `Coding · ${session.status}`
             : progress}
           {session && progress && !busy ? ' · Responding' : ''}
         </span>

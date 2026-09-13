@@ -1,0 +1,11 @@
+# Azure Sandbox runtime
+
+The app uses three Container Apps Sandbox groups: quick Python, headless projects and developer workstations. These are Sandbox resources with explicit SDK lifecycle, not regular Container Apps replicas. Private custom images provide scientific Python and developer SDKs. The runtime preserves existing workspace IDs and links.
+
+Azure disk/memory suspend retains workspace state; private Blob stores per-workspace eligible-source checkpoints and per-chat quick working-file checkpoints. The broker uses ETags to prevent blind overwrites. Blob checkpoints do not replace conflict-aware source sync and do not contain installed packages or credentials. Chat records and artifacts also remain local. Preview-only or documentation reads allocate no project.
+
+The runtime maintains a durable local cost ledger. Each compute/model operation reserves a bounded amount before starting; failed or ambiguous cloud operations retain reservations until reconciled. The bill is refreshed when possible, but delayed billing is never treated as zero usage. The $200 pilot budget has a conservative operational cutoff and allowance for storage, registry, requests and delayed meters. The Operations page distinguishes completed estimates from open reservations.
+
+Use Azure runtime → Stop compute to pause warm replenishment, cancel waiting admissions and stop all execution after eligible-source checkpoints. Persistent homes remain resumable. The private ACR and retained storage still incur their applicable charges. The custom Session Pool experiment has been deleted, including its dedicated-profile environment. It is not a dependency of the application.
+
+See [scaling](SCALING.md) for the exact quotas, ten-minute warm policy, costs and Session Pool comparison; [projects](PROJECTS.md) for ownership and synchronization; [validation](VALIDATION.md) for evidence and limits. This API is in preview; retain recoverable source outside service-specific snapshots.

@@ -1,0 +1,57 @@
+{
+  "currency": "USD",
+  "region": "eastus2",
+  "price_checked_date": "2026-09-12",
+  "total_testing_limit": 200,
+  "operational_cutoff": 150,
+  "unallocated_safety_reserve": 50,
+  "budget_scope": "Total incremental pilot testing cost, not a fresh allowance each month. Include testing-related model charges separately from Azure billing.",
+  "retail_prices_before_tax_and_discounts": {
+    "vcpu_active_per_second": 0.000024,
+    "memory_gib_per_second": 0.000003,
+    "requests_per_million": 0.4,
+    "acr_basic_per_day": 0.1666,
+    "acr_additional_storage_gb_month": 0.1,
+    "aca_private_endpoint_infrastructure_per_hour": 0.1
+  },
+  "profiles": {
+    "quick": {"cpu": 1, "memory_gib": 2, "group": "lab-quick", "max_count": 1},
+    "headless": {"cpu": 2, "memory_gib": 4, "group": "lab-headless", "max_count": 1},
+    "developer": {"cpu": 4, "memory_gib": 8, "group": "lab-developer", "max_count": 1}
+  },
+  "planning_scenario": {
+    "running_hours_each_profile": 100,
+    "registry_days_if_approved": 30,
+    "storage_network_logging_allowance": 20,
+    "testing_model_allowance": 30
+  },
+  "require_explicit_approval_before_creation": [
+    "Container Registry including Basic",
+    "Provisioned or reserved Data Disk capacity unless purely metered usage pricing is confirmed",
+    "Private endpoints including Container Apps environment infrastructure fees",
+    "NAT Gateway, VPN Gateway, Azure Firewall, paid public IPs",
+    "Dedicated workload profiles, VMs, provisioned databases, reserved logging capacity",
+    "Any other resource with fixed, minimum, provisioned, or committed charges"
+  ],
+  "unresolved_before_persistent_storage": [
+    "Sandbox root disk, disk image, memory snapshot and Data Disk volume rates and billing basis",
+    "Subscription billing currency, offer, credits, and applicable taxes",
+    "Independent enforcement for time-bounded test sessions if the local controller disconnects"
+  ],
+  "constraints": [
+    "No unattended running sandboxes before independent timeout enforcement is validated",
+    "No prewarmed running reserve during initial tests",
+    "No anonymous IDE or project preview ingress",
+    "No package policy bypass or model credentials in generated-code sandboxes",
+    "Azure budgets are alerts, not hard spending caps; do not rely on delayed billing alone",
+    "No automatic deletion of existing project data for cost control",
+    "Unknown rates are not zero and allowances are estimates, not guarantees"
+  ],
+  "sources": [
+    "https://azure.microsoft.com/en-us/pricing/details/container-apps/",
+    "https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices",
+    "https://azure.microsoft.com/en-us/pricing/details/container-registry/",
+    "https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/tutorial-acm-create-budgets",
+    "https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/spending-limit"
+  ]
+}

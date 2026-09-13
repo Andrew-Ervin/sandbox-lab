@@ -1,0 +1,29 @@
+'use client';
+import {useEffect,useState} from 'react';
+import {Cloud,RefreshCw,Square} from 'lucide-react';
+import {Button} from '@/components/ui/button';
+import {startPolling} from '@/lib/polling';
+
+type Fetch=(input:RequestInfo|URL,init?:RequestInit)=>Promise<Response>;
+type Runtime={active_provider:string;region:string;storage_reviewed:boolean;error:string|null;budget:{ceiling_usd:number;cutoff_usd:number;estimated_and_reserved_usd:number;billed_usd:number;other_allowance_usd:number;available_usd:number;blocked:boolean};profiles:{kind:string;group:string;cpu:string;memory:string;hourly_usd:number;lease_seconds:number;active_limit:number;retained_limit:number;idle_seconds:number;suspend_mode:string}[];workspaces:{id:string;name:string;kind:string;status:string;lease_until:number;startup_timings?:{total_seconds:number};last_checkpoint_at?:number;storage_error?:string}[];storage?:{enabled:boolean;checkpoints:number;current_bytes:number;version_retention_days:number}};
+const money=(value:number)=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:4}).format(value);
+export function AzureRuntimePanel({sessionFetch}:{sessionFetch:Fetch}){
+  const [data,setData]=useState<Runtime|null>(null),[error,setError]=useState(''),[refresh,setRefresh]=useState(0),[stopping,setStopping]=useState(false);
+  useEffect(()=>startPolling({run:async()=>{const r=await sessionFetch('/api/azure-runtime');if(!r.ok)throw Error('Azure status unavailable');setData(await r.json());setError('')},interval:()=>15000,onError:()=>setError('Azure status could not refresh. The last observation remains visible.')}),[sessionFetch,refresh]);
+  return <section className="workspace-page collection-page ops-page">
+    <header className="ops-header"><div><p className="eyebrow">RESOURCE CONTROLS</p><h1>Compute & storage</h1><p>Execution, workspace readiness and the testing budget.</p></div><Button variant="outline" onClick={()=>setRefresh(v=>v+1)}><RefreshCw size={15}/>Refresh</Button></header>
+    {error&&<p role="alert">{error}</p>}
+    {!data?<p>Loading resource usage…</p>:<>
+      <div className="ops-metrics">
+        {[["Test limit",money(data.budget.ceiling_usd),"Cumulative across the test"],["Usage and reservations",money(data.budget.estimated_and_reserved_usd),"Includes active compute leases"],["Provider-reported bill",money(data.budget.billed_usd),"Azure billing arrives later than usage"],["Available for new tests",money(data.budget.available_usd),`Admission stops at ${money(data.budget.cutoff_usd)}; other costs reserved separately`]].map(([label,value,detail])=><article className="ops-metric" key={label}><div><Cloud size={17}/><span>{label}</span></div><strong>{value}</strong><small>{detail}</small></article>)}
+      </div>
+      {(data.error||data.budget.blocked)&&<p role="alert">{data.error||'Budget admission is paused. No new compute will start.'}</p>}
+      {!data.storage_reviewed&&<article className="ops-card"><h2>Persistent storage review pending</h2><p>Disposable testing is available. Creating persistent project and developer sandboxes requires a verified storage price and approval for any fixed charge. Existing workspace files remain with their current provider.</p></article>}
+      <article className="ops-card"><h2>Compute defaults · {data.region}</h2><div className="ops-table-wrap"><table><thead><tr><th>Use</th><th>Group</th><th>CPU / memory</th><th>Compute per hour</th><th>Idle / lease</th><th>Running / retained limit</th></tr></thead><tbody>{data.profiles.map(p=><tr key={p.kind}><td>{p.kind}</td><td>{p.group}</td><td>{p.cpu} / {p.memory}</td><td>{money(p.hourly_usd)}</td><td>{p.idle_seconds/60} / {p.lease_seconds/60} min · {p.suspend_mode}</td><td>{p.active_limit} / {p.retained_limit}</td></tr>)}</tbody></table></div><p>Recently used compute keeps one spare ready for ten minutes. Idle workspaces sleep and retain saved files.</p></article>
+      {data.storage?.enabled&&<article className="ops-card"><h2>Saved file checkpoints</h2><p>{data.storage.checkpoints} checkpoints · {(data.storage.current_bytes/1_000_000).toFixed(2)} MB · previous versions retained for {data.storage.version_retention_days} days. Headless and GUI source stays separate, with conflict-aware synchronization. Credentials and installed dependencies are excluded.</p><p>Blob uses Standard Hot LRS consumption pricing. Azure has not published a verified retained-sandbox storage rate; the budget includes a separate allowance for storage and other charges.</p></article>}
+      <article className="ops-card"><div className="ops-card-heading"><h2>Workspaces</h2><Button variant="outline" disabled={stopping} onClick={async()=>{setStopping(true);try{const r=await sessionFetch('/api/azure-runtime/stop',{method:'POST'});if(!r.ok)throw Error('Some Azure stops are unconfirmed; inspect the runtime ledger');setRefresh(v=>v+1)}catch(e){setError(e instanceof Error?e.message:'Stop failed')}finally{setStopping(false)}}}><Square size={13}/>{stopping?'Stopping…':'Stop test compute'}</Button></div>
+      {data.workspaces.length?data.workspaces.map(w=><div className="ops-row" key={w.id}><span><strong>{w.name}</strong><small>{w.kind}</small></span><span>{w.status}{w.startup_timings&&<small>Last preparation: {w.startup_timings.total_seconds.toFixed(1)}s</small>}{w.storage_error&&<small role="alert">{w.storage_error}</small>}</span></div>):<p>No workspaces yet.</p>}
+      <p>Stopping retains persistent files. Disposable sandboxes are deleted. Unknown cleanup keeps its cost reservation until Azure confirms completion.</p></article>
+    </>}
+  </section>;
+}

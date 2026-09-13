@@ -13,7 +13,7 @@ from chatkit.server import StreamingResult
 from .store import SQLiteStore
 from .chat import LabChat
 from .compute import compute
-from .coder import coder
+from .headless import headless
 from .previews import previews
 from .config import STATE
 from fastapi import FastAPI, Request
@@ -26,17 +26,25 @@ from .idle import IdleWorkspaces
 from .apps import apps
 from . import package_policy
 from .live import live_containers,runtime
+from .runtime_health import status as runtime_health_status
 store = SQLiteStore()
 chat_server = LabChat(store)
 jobs = Jobs(store)
+from .names import Names
+from .azure_runtime import runtime as azure_runtime
+names = Names(store,chat_server.completion,azure_runtime())
 health = HealthCache()
-idle = IdleWorkspaces(coder,developer,previews)
+idle = IdleWorkspaces(headless,developer,previews)
 from .coding_sessions import CodingSessions
-coding_sessions = CodingSessions(coder,store)
+from .runtime_provider import azure_enabled
+if azure_enabled():
+    from .azure_sessions import AzureCodingSessions as CodingSessions
+coding_sessions = CodingSessions(headless,store)
 @asynccontextmanager
 async def lifespan(app):
     store.recover_jobs()
     store.migrate_projects()
+    identity.migrate_legacy(store,azure_runtime())
     coding_sessions.seed()
     migration=STATE/'ui-migration-v5.done'
     if not migration.exists():
@@ -81,10 +89,11 @@ async def lifespan(app):
                     if text!=part.text: part.text=text; changed=True
                 if changed: await store.save_item(thread.id,item,{'owner':'local-owner'})
         migration.write_text('complete')
+    naming_task=asyncio.create_task(names.maintain())
     task=asyncio.create_task(compute.maintain())
     preview_task=asyncio.create_task(previews.maintain())
     idle_task=asyncio.create_task(idle.maintain())
-    reserve_task=asyncio.create_task(coder.reserve.maintain(store))
+    reserve_task=asyncio.create_task(headless.reserve.maintain(store))
     deletion_task=asyncio.create_task(project_deletions.maintain())
     links_task=asyncio.create_task(workspace_links.sync.maintain())
     credential_task=asyncio.create_task(developer.maintain_credentials())
@@ -93,18 +102,24 @@ async def lifespan(app):
     yield
     await jobs.close()
     await chat_server.close()
-    task.cancel();preview_task.cancel();idle_task.cancel();reserve_task.cancel();deletion_task.cancel();links_task.cancel();links_migration.cancel();credential_task.cancel();coding_task.cancel()
-    await asyncio.gather(task,preview_task,idle_task,reserve_task,deletion_task,links_task,links_migration,credential_task,coding_task,return_exceptions=True)
+    naming_task.cancel();task.cancel();preview_task.cancel();idle_task.cancel();reserve_task.cancel();deletion_task.cancel();links_task.cancel();links_migration.cancel();credential_task.cancel();coding_task.cancel()
+    await asyncio.gather(naming_task,task,preview_task,idle_task,reserve_task,deletion_task,links_task,links_migration,credential_task,coding_task,return_exceptions=True)
     await previews.close()
+    if azure_enabled():
+        from .azure_runtime import runtime
+        await runtime().close()
 app = FastAPI(title='Sandbox Lab', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
-sessions = {}
+from .azure_routes import install as install_azure_routes
+azure_status=install_azure_routes(app)
+from .identity import identity, current_owner
+sessions = identity.sessions
 # Optional local experiment routes use the same session/CSRF middleware.
 from .experiments import experiment
 experiment.install(app,sessions,store)
 from .projects import install_projects
-project_deletions=install_projects(app,store,coder,live_containers)
+project_deletions=install_projects(app,store,headless,live_containers)
 from .workspace_links import install_workspace_links
-workspace_links=install_workspace_links(app,store,coder,developer)
+workspace_links=install_workspace_links(app,store,headless,developer)
 chat_server.workspace_links=workspace_links
 ALLOWED_HOSTS = {'127.0.0.1:3000', 'localhost:3000', '127.0.0.1:8787', 'localhost:8787'}
 ALLOWED_ORIGINS = {'http://' + h for h in ALLOWED_HOSTS}
@@ -114,14 +129,19 @@ async def local_security(request: Request, call_next):
         return JSONResponse({'detail':'Untrusted host'}, 403)
     if request.headers.get('origin') and request.headers['origin'] not in ALLOWED_ORIGINS:
         return JSONResponse({'detail':'Untrusted origin'}, 403)
-    if request.url.path != '/api/bootstrap':
+    if request.url.path not in ('/api/bootstrap','/api/auth/login','/api/auth/callback'):
         token = request.cookies.get('lab_session', '')
-        entry = sessions.get(token)
-        if not entry or entry['expires'] < time.time():
-            return JSONResponse({'detail':'Reload to start a local session'}, 401)
+        entry = identity.session(token)
+        if not entry:
+            return JSONResponse({'detail':'Sign in to continue'}, 401)
         if request.method != 'GET' and not secrets.compare_digest(request.headers.get('x-lab-csrf', ''), entry['csrf']):
             return JSONResponse({'detail':'Invalid CSRF token'}, 403)
-        request.state.owner = 'local-owner'
+        request.state.owner = entry['owner']
+        current_owner.set(entry['owner'])
+        if request.url.path.startswith(('/api/azure-runtime','/api/operations','/api/package-policy','/api/compute/warm','/api/experiments')):
+            if entry['owner'] != identity.admin: return JSONResponse({'detail':'Administrator access required'},403)
+        match = re.match(r'^/api/developer/workspaces/([^/]+)(?:/|$)',request.url.path)
+        if match and not store.developer_project(match[1],entry['owner']): return JSONResponse({'detail':'Workspace not found'},404)
     response = await call_next(request)
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Referrer-Policy'] = 'no-referrer'
@@ -129,24 +149,30 @@ async def local_security(request: Request, call_next):
     return response
 @app.post('/api/bootstrap')
 async def bootstrap(request: Request):
-    now = time.time()
-    for key in list(sessions):
-        if sessions[key]['expires'] < now: sessions.pop(key)
-    token = request.cookies.get('lab_session', '')
-    if token not in sessions:
-        token = secrets.token_urlsafe(32)
-        sessions[token] = {'csrf':secrets.token_urlsafe(32), 'expires':now+86400}
-    response = JSONResponse({'csrf':sessions[token]['csrf'], 'domain_key':DOMAIN_KEY})
-    response.set_cookie('lab_session', token, httponly=True, samesite='strict', max_age=86400)
-    return response
+    return identity.bootstrap(request)
+
+@app.get('/api/auth/login')
+async def login(): return identity.login()
+
+@app.get('/api/auth/callback')
+async def callback(request:Request): return await identity.callback(request)
+
+@app.post('/api/auth/logout')
+async def logout(request:Request):
+    sessions.pop(request.cookies.get('lab_session',''),None);identity.persist()
+    response=JSONResponse({'signed_out':True});response.delete_cookie('lab_session');return response
+
 @app.get('/api/status')
 async def status(request: Request):
-    infrastructure,live=await asyncio.gather(health.get(compute,coder),live_containers.get())
+    infrastructure,live=await asyncio.gather(health.get(compute,headless),live_containers.get())
+    if request.state.owner != identity.admin:
+        live={'pods':[],'workspaces':[], 'observed_at':time.time()}
+        infrastructure={}
     runs=store.runs(request.state.owner,details=False)
     app_runs=store.apps(request.state.owner)
     for run in runs+app_runs:
         run['runtime_status']='static' if run.get('preview_artifact') else runtime(run.get('workspace_id'),None,live,'lab-agents') if run.get('workspace_id') else ('running' if any(p['name']==run.get('pod') for p in live['pods']) else 'released')
-    return {'project_reserve':coder.reserve.status(),'containers':live,'idle_policy':{'project_seconds':idle.project_idle,'developer_seconds':idle.developer_idle,'error':idle.error},**infrastructure, 'openrouter':bool(API_KEY), 'model':MODEL, 'reasoning':REASONING, 'coding_engine':os.getenv('PROJECT_ENGINE','ori-pi'), 'pool':compute.status(), 'credential_renewal':{'developer_error':developer.renewal_error},'idle_workspaces_stopped':idle.stopped, 'runs':runs,'apps':app_runs,'jobs':[{k:v for k,v in j.items() if k!='owner'} for j in store.jobs(request.state.owner)]}
+    return {'runtime_health':runtime_health_status(),'project_reserve':headless.reserve.status(),'containers':live,'idle_policy':{'project_seconds':idle.project_idle,'developer_seconds':idle.developer_idle,'error':idle.error},**infrastructure, 'openrouter':bool(API_KEY), 'model':MODEL, 'reasoning':REASONING, 'coding_engine':'azure-broker' if azure_enabled() else os.getenv('PROJECT_ENGINE','ori-pi'), 'pool':compute.status(), 'credential_renewal':{'developer_error':developer.renewal_error},'idle_workspaces_stopped':idle.stopped, 'runs':runs,'apps':app_runs,'jobs':[{k:v for k,v in j.items() if k!='owner'} for j in store.jobs(request.state.owner)]}
 @app.get('/api/threads')
 async def threads(request: Request):
     return store.thread_summaries(request.state.owner)
@@ -188,7 +214,7 @@ async def chatkit(request: Request):
     if mode not in ['auto','quick','analysis','app']: raise HTTPException(400,'Unknown execution mode')
     try: parsed=json.loads(body)
     except ValueError: raise HTTPException(400,'Invalid request')
-    if parsed.get('type') in ['threads.create','threads.add_user_message','threads.retry_after_item'] and len(jobs.tasks)>=jobs.max_pending:
+    if parsed.get('type') in ['threads.create','threads.add_user_message','threads.retry_after_item'] and jobs.max_pending and len(jobs.tasks)>=jobs.max_pending:
         raise HTTPException(429,'The local job queue is full. Retry after a running task finishes.')
     thread_id=parsed.get('params',{}).get('thread_id')
     if thread_id and parsed.get('type') in ['threads.add_user_message','threads.retry_after_item','threads.delete']:
@@ -240,11 +266,11 @@ async def app_preview(run_id: str, request: Request):
         if not url: raise HTTPException(404)
         return {'url':url} if request.query_params.get('resolve') else RedirectResponse(url)
     if not run.get('workspace_id'): raise HTTPException(404)
-    ws=await coder.api('GET','/api/v2/workspaces/'+run['workspace_id'])
-    if ws['template_id']!=coder.settings()['template_id']: raise HTTPException(403)
+    ws=await headless.api('GET','/api/v2/workspaces/'+run['workspace_id'])
+    if ws['template_id']!=headless.settings()['template_id']: raise HTTPException(403)
     if ws['latest_build']['status']!='running': raise HTTPException(409,'Workspace is asleep. Open or reload this app to resume it automatically.')
-    url=await previews.app(ws,coder.settings())
-    coder.touched[ws['id']]=time.time()
+    url=await previews.app(ws,headless.settings())
+    headless.touched[ws['id']]=time.time()
     return {'url':url} if request.query_params.get('resolve') else RedirectResponse(url)
 
 @app.post('/api/apps/{run_id}/start')
@@ -253,7 +279,7 @@ async def start_app(run_id: str, request: Request):
     if not run or run.get('mode')!='app':raise HTTPException(404)
     if run.get('preview_artifact'):return await app_preview(run_id,request)
     if not run.get('workspace_id'):raise HTTPException(404)
-    try:return {'url':await apps.ai(run,store,request.state.owner,coder,previews)}
+    try:return {'url':await apps.ai(run,store,request.state.owner,headless,previews)}
     except ValueError as exc:raise HTTPException(403,str(exc))
     except RuntimeError as exc:raise HTTPException(503,str(exc))
 
@@ -270,7 +296,6 @@ async def resume_developer(workspace_id: str, request: Request):
     except ValueError as exc:raise HTTPException(404,str(exc))
     except RuntimeError as exc:raise HTTPException(503,str(exc))
     response=JSONResponse({'url':url})
-    response.set_cookie('coder_session_token',developer.token,httponly=True,samesite='lax',max_age=86400)
     return response
 
 @app.post('/api/threads/{thread_id}/stop')
@@ -282,9 +307,9 @@ async def stop_thread(thread_id: str, request: Request):
 @app.get('/api/threads/{thread_id}/files')
 async def thread_files(thread_id: str,request: Request):
     thread=await store.load_thread(thread_id,{'owner':request.state.owner})
-    return {'files':store.files(thread_id),'workspace_id':thread.metadata.get('coder_workspace_id'),
+    return {'files':store.files(thread_id),'workspace_id':thread.metadata.get('workspace_id'),
             'quick':'Fresh interpreter; local working-file checkpoint restored to /workspace; selected artifacts restored to /workspace/files.',
-            'project_id':(store.project_for_thread(thread_id,request.state.owner) or {}).get('id'),'packages':'Project conversations share their Coder home, source files, packages and caches.'}
+            'project_id':(store.project_for_thread(thread_id,request.state.owner) or {}).get('id'),'packages':'Project conversations share their workspace home, source files, packages and caches.'}
 
 @app.get('/api/runs/{run_id}')
 async def run_detail(run_id: str, request: Request):
@@ -297,31 +322,49 @@ async def developer_workspaces(request:Request):
     try:
         workspaces=await developer.list();live=await live_containers.get()
         linked={wid:{'id':pid,'name':name} for wid,pid,name in store.db.execute('SELECT developer_workspace_id,id,name FROM projects WHERE owner=? AND developer_workspace_id IS NOT NULL',(request.state.owner,))}
+        workspaces=[ws for ws in workspaces if ws['id'] in linked]
         for ws in workspaces:
-            ws['coder_status']=ws['status'];ws['status']=runtime(ws['id'],ws['status'],live,'lab-dev');ws['observed_at']=live['observed_at']
+            ws['provider_status']=ws['status'];ws['status']=runtime(ws['id'],ws['status'],live,'lab-dev');ws['observed_at']=live['observed_at']
             p=linked.get(ws['id'])
             ws['project_id']=p['id'] if p else None;ws['project_name']=p['name'] if p else None
-        return workspaces
-    except Exception: raise HTTPException(503,'Developer Coder is not available')
+            ws['suggested_name']=names.suggestion(ws['id'])
+        return sorted(workspaces,key=lambda w:(-w.get('last_used_at',0),w['id']))
+    except Exception: raise HTTPException(503,'Developer workspace provider is not available')
+
+@app.patch('/api/developer/workspaces/{workspace_id}/name')
+async def rename_workspace(workspace_id:str,request:Request):
+    from .titles import clean_title
+    p=store.developer_project(workspace_id,request.state.owner)
+    if not p:raise HTTPException(404,'Workspace not found')
+    data=await request.json()
+    if set(data)!={'name'}:raise HTTPException(400,'Supply a name')
+    try:name=clean_title(data['name'])
+    except ValueError as e:raise HTTPException(400,str(e))
+    control=azure_runtime();record=control.record(workspace_id)
+    record['display_name']=name;control.save(record)
+    with store.db:
+        store.db.execute("UPDATE generated_names SET name=?,state='accepted' WHERE id=?",(name,workspace_id))
+        store.db.execute('UPDATE projects SET developer_name=? WHERE developer_workspace_id=? AND owner=?',(name,workspace_id,request.state.owner))
+    return {'id':workspace_id,'name':name}
 
 @app.post('/api/developer/workspaces')
 async def developer_start(request: Request):
     data=await request.json()
     try:
-        workspace=await developer.start(data.get('name','dev'))
+        workspace=await developer.start(data.get('name','New workspace'),owner=request.state.owner,compute_size=data.get('compute_size','balanced'))
         project=store.link_developer(workspace['id'],request.state.owner,workspace['name'])
         workspace.update(project_id=project['id'],project_name=project['name'])
         response=JSONResponse(workspace)
-        response.set_cookie('coder_session_token',developer.token,httponly=True,samesite='lax',max_age=86400)
         return response
     except ValueError as exc: raise HTTPException(400,str(exc))
-    except Exception: raise HTTPException(503,'Could not start the developer workspace; check the developer portal')
+    except RuntimeError as exc: raise HTTPException(503,str(exc))
+    except Exception: raise HTTPException(503,'Could not start the developer workspace; check runtime status')
 
 @app.delete('/api/developer/workspaces/{workspace_id}')
 async def developer_delete(workspace_id: str,request:Request):
     try:
         p=store.developer_project(workspace_id,request.state.owner)
-        lock=coder.project_locks.setdefault(p['id'],asyncio.Lock()) if p else asyncio.Lock()
+        lock=headless.project_locks.setdefault(p['id'],asyncio.Lock()) if p else asyncio.Lock()
         if lock.locked():raise HTTPException(409,'Wait for this project’s sync operation to finish')
         async with lock:
             result=await developer.delete(workspace_id)
@@ -336,11 +379,11 @@ async def developer_delete(workspace_id: str,request:Request):
 async def developer_open(workspace_id: str, resolve: bool = False):
     workspace=next((w for w in await developer.list() if w['id']==workspace_id),None)
     if not workspace: raise HTTPException(404)
-    if workspace['status']!='running': raise HTTPException(409,'Start the developer workspace before opening VS Code.')
+    if workspace['status']!='running': raise HTTPException(409,'Open the workspace to resume it.')
     try: await developer.prepare(workspace)
     except RuntimeError as exc: raise HTTPException(503,str(exc))
-    response=JSONResponse({'url':workspace['ide_url']}) if resolve else RedirectResponse(workspace['ide_url'])
-    response.set_cookie('coder_session_token',developer.token,httponly=True,samesite='lax',max_age=86400)
+    ide_url=await developer.ide(workspace) if azure_enabled() else workspace['ide_url']
+    response=JSONResponse({'url':ide_url}) if resolve else RedirectResponse(ide_url)
     return response
 
 @app.get('/api/developer/workspaces/{workspace_id}/preview')
@@ -350,7 +393,7 @@ async def developer_preview(workspace_id: str, resolve: bool = False):
     if workspace['status']!='running': raise HTTPException(409,'Start the developer workspace before opening its app.')
     developer.touched[workspace_id]=time.time()
     try:
-        url=await previews.app(workspace,{'token':developer.token},coder_url='http://127.0.0.1:7080')
+        url=await previews.app(workspace,{'token':developer.token},provider_url='http://127.0.0.1:7080')
     except RuntimeError as exc: raise HTTPException(503,str(exc))
     return JSONResponse({'url':url}) if resolve else RedirectResponse(url)
 
@@ -359,10 +402,39 @@ async def developer_harness(workspace_id: str):
     workspace=next((w for w in await developer.list() if w['id']==workspace_id),None)
     if not workspace: raise HTTPException(404)
     developer.configure(workspace_id,workspace['name'])
-    return {'status':'Preparing Ori / Pi'}
+    return {'status':'Preparing coding tools'}
+
+@app.patch('/api/developer/workspaces/{workspace_id}/compute')
+async def workspace_compute(workspace_id:str,request:Request):
+    body=await request.json()
+    if set(body)!={'size'}:raise HTTPException(400,'Choose a compute size')
+    project=store.developer_project(workspace_id,request.state.owner)
+    lock=headless.project_locks.setdefault(project['id'],asyncio.Lock())
+    if lock.locked():raise HTTPException(409,'Wait for project synchronization to finish')
+    try:
+        async with lock:
+            workspace_links.idle(project,request.state.owner)
+            ws=await azure_runtime().resize(workspace_id,body['size'])
+            developer.configured_until.pop(workspace_id,None)
+            await developer.prepare(ws)
+            return developer.public(ws)
+    except ValueError as exc:raise HTTPException(400,str(exc))
+    except RuntimeError as exc:raise HTTPException(409,str(exc))
+
+@app.get('/api/me/editor-profile')
+async def editor_profile(request:Request):
+    return azure_runtime().editor_profiles.get(request.state.owner)
+
+@app.post('/api/developer/workspaces/{workspace_id}/preferences')
+async def save_editor_profile(workspace_id:str,request:Request):
+    control=azure_runtime();record=control.record(workspace_id)
+    if record['state']!='running':raise HTTPException(409,'Open the workspace first')
+    await control.editor_profiles.capture(record)
+    return control.editor_profiles.get(request.state.owner)
 
 @app.post('/api/compute/warm')
 async def prewarm_compute():
+    compute.runtime.warm.demand('quick')
     compute.policy.warm();compute.refill.set()
     return {'warming':True,'pool':compute.status()}
 
@@ -371,4 +443,18 @@ async def developer_heartbeat(workspace_id: str):
     workspace=next((w for w in await developer.list() if w['id']==workspace_id),None)
     if not workspace: raise HTTPException(404)
     developer.touched[workspace_id]=time.time()
+    developer.runtime.touch(workspace_id)
+    developer.runtime.warm.demand('developer')
+    await developer.ide(workspace)
+    control=azure_runtime();record=control.record(workspace_id)
+    if time.time()-record.get('preferences_checked_at',0)>30:
+        record['preferences_checked_at']=time.time();control.save(record)
+        try:await control.editor_profiles.capture(record)
+        except RuntimeError:pass
     return {'active':True}
+
+@app.get("/api/operations")
+async def operations_snapshot(request: Request):
+    # Existing middleware authenticates the single local owner. Production requires an admin role.
+    from .operations import snapshot
+    return await snapshot()

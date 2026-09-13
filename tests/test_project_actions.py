@@ -6,7 +6,7 @@ from chatkit.store import NotFoundError
 from backend.store import SQLiteStore
 from backend.projects import install_projects
 from backend.workspace_links import install_workspace_links
-from backend.coder import CoderAPIError
+from backend.headless import HeadlessAPIError
 from test_projects import chat
 
 @pytest.mark.asyncio
@@ -41,12 +41,12 @@ async def fixture(tmp_path,monkeypatch):
         if method=='POST':state.update(status='deleting',transition='delete')
         return {'id':'ws1','template_id':'template','latest_build':{'status':state['status'],'transition':state['transition']}}
     async def live():return {'pods':[],'unavailable_namespaces':[]}
-    coder=SimpleNamespace(project_locks={},active=set(),provisioning=set(),settings=lambda:{'template_id':'template'},api=api)
+    headless=SimpleNamespace(project_locks={},active=set(),provisioning=set(),settings=lambda:{'template_id':'template'},api=api)
     app=FastAPI()
     @app.middleware('http')
     async def identity(request:Request,next):request.state.owner=request.headers.get('test-owner','alice');return await next(request)
-    state['deletions']=install_projects(app,s,coder,SimpleNamespace(get=live))
-    install_workspace_links(app,s,coder,SimpleNamespace())
+    state['deletions']=install_projects(app,s,headless,SimpleNamespace(get=live))
+    install_workspace_links(app,s,headless,SimpleNamespace())
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test') as c:yield c,s,p,state,tmp_path
 
 @pytest.mark.asyncio
@@ -72,7 +72,7 @@ async def test_deletion_waits_for_coder_and_preserves_history_on_failure(fixture
     mirror=tmp/'mock-onedrive'/'Projects'/p['id'];mirror.mkdir(parents=True);(mirror/'file').write_text('copy')
     assert (await c.request('DELETE',url,json={'name':'wrong name'})).status_code==400
     assert not state['calls']
-    state['error']=CoderAPIError(503,'offline')
+    state['error']=HeadlessAPIError(503,'offline')
     assert (await c.request('DELETE',url,json={'name':p['name']})).status_code==202
     await state['deletions'].advance(p['id'],'alice')
     assert state['deletions'].get(p['id'],'alice')['retries']==1
@@ -114,13 +114,13 @@ async def test_missing_workspace_and_failed_build_are_retryable(fixture):
     state['status']='failed'
     await worker.advance(p['id'],'alice')
     result=(await c.get(url+'/deletion')).json()
-    assert result['status']=='failed' and 'Coder' in result['error']
+    assert result['status']=='failed' and 'Azure' in result['error']
     await worker.advance(p['id'],'alice')
     assert len([x for x in state['calls'] if x[0]=='POST'])==1
     assert (await c.request('DELETE',url,json={'name':p['name']})).status_code==202
     await worker.advance(p['id'],'alice')
     assert len([x for x in state['calls'] if x[0]=='POST'])==2
-    state['error']=CoderAPIError(410,'removed')
+    state['error']=HeadlessAPIError(410,'removed')
     await worker.advance(p['id'],'alice')
     assert (await c.get(url+'/deletion')).json()['status']=='deleted'
     assert not s.projects('alice')
@@ -155,7 +155,7 @@ async def test_status_is_read_only_and_deletion_resumes_after_restart(fixture):
     replacement=ProjectDeletions(s,old.step)
     await replacement.advance(p['id'],'alice')
     assert len([x for x in state['calls'] if x[0]=='POST'])==1
-    state['error']=CoderAPIError(410,'gone')
+    state['error']=HeadlessAPIError(410,'gone')
     await replacement.advance(p['id'],'alice')
     assert not s.projects('alice')
     assert replacement.get(p['id'],'alice')['status']=='deleted'
