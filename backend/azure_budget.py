@@ -26,13 +26,18 @@ class AzureBudget:
 
     def status(self):
         initial = self.db.execute("SELECT value FROM budget_meta WHERE key='initial'").fetchone()[0]
-        estimated = initial + self.db.execute('SELECT COALESCE(SUM(amount),0) FROM charges').fetchone()[0]
+        # OpenRouter has a separately configured budget. Keep its history visible,
+        # but neither its reservations nor reconciliation credits affect Azure.
+        azure_filter = "kind NOT IN ('model','model-reconciliation')"
+        estimated = initial + self.db.execute('SELECT COALESCE(SUM(amount),0) FROM charges WHERE '+azure_filter).fetchone()[0]
+        model_estimated = self.db.execute("SELECT COALESCE(SUM(amount),0) FROM charges WHERE kind IN ('model','model-reconciliation')").fetchone()[0]
+        model_open = self.db.execute("SELECT COALESCE(SUM(amount),0) FROM charges WHERE kind='model' AND ended IS NULL").fetchone()[0]
         row = self.db.execute("SELECT value FROM budget_meta WHERE key='billed'").fetchone()
         billed = row[0] if row else 0
         reported = self.db.execute("SELECT value FROM budget_meta WHERE key='operator_reported_spend'").fetchone()
         # Conservative: billing can include already-counted usage. Taking max
         # avoids double-counting while retaining every in-flight reservation.
-        open_reserved = self.db.execute('SELECT COALESCE(SUM(amount),0) FROM charges WHERE ended IS NULL').fetchone()[0]
+        open_reserved = self.db.execute('SELECT COALESCE(SUM(amount),0) FROM charges WHERE ended IS NULL AND '+azure_filter).fetchone()[0]
         committed = max(estimated, billed + open_reserved) + self.other_allowance
         return {'ceiling_usd': self.ceiling, 'cutoff_usd': self.cutoff,
                 'estimated_and_reserved_usd': round(estimated, 6), 'billed_usd': billed,
@@ -42,13 +47,16 @@ class AzureBudget:
                 'billing_is_delayed': True, 'billing_available': row is not None,
                 'operator_reported_spend_usd': reported[0] if reported else None,
                 'open_reservations_usd': round(open_reserved,6),
+                'model_estimated_and_reserved_usd': round(model_estimated,6),
+                'model_open_reservations_usd': round(model_open,6),
+                'model_budget_external': True,
                 'estimated_completed_usd': round(estimated-open_reserved,6), 'fixed_cost_approvals': []}
 
     def reserve(self, kind, amount):
         if not math.isfinite(amount) or amount <= 0: raise ValueError('Invalid cost reservation')
         self.db.execute('BEGIN IMMEDIATE')
         try:
-            if self.status()['available_usd'] < amount:
+            if kind != 'model' and self.status()['available_usd'] < amount:
                 raise RuntimeError('The Azure test budget cannot cover this operation. Compute is paused; the $200 limit has not been increased.')
             ident = uuid.uuid4().hex
             self.db.execute('INSERT INTO charges VALUES (?,?,?,?,NULL)', (ident, kind, amount, time.time()))

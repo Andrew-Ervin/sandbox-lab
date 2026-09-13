@@ -32,6 +32,34 @@ def test_uncertain_operation_and_bill_keep_reservations(tmp_path):
     assert budget.status()['billed_usd']==70
 
 
+def test_model_usage_is_separate_from_azure_admission(tmp_path):
+    path=tmp_path/'budget.sqlite';budget=AzureBudget(path)
+    cloud=budget.reserve('compute',90)
+    model=budget.reserve('model',500)
+    budget.finish(model,400)
+    pending=budget.reserve('model',200)
+    reopened=AzureBudget(path)
+    assert reopened.status()['available_usd']==10
+    assert reopened.status()['open_reservations_usd']==90
+    assert reopened.status()['model_estimated_and_reserved_usd']==600
+    assert reopened.status()['model_open_reservations_usd']==200
+    with pytest.raises(RuntimeError,match='budget'):reopened.reserve('compute',11)
+    reopened.refresh_billed(100)
+    assert reopened.status()['blocked']
+    # An Azure cutoff must not replace the provider's independent model budget.
+    reopened.reserve('model',1)
+
+
+def test_model_reconciliation_cannot_refund_azure_charges(tmp_path):
+    budget=AzureBudget(tmp_path/'budget.sqlite')
+    budget.reserve('compute',100)
+    model=budget.reserve('model',80);budget.finish(model)
+    budget.db.execute("INSERT INTO charges VALUES ('reconciled','model-reconciliation',-75,1,1)")
+    assert budget.status()['estimated_and_reserved_usd']==100
+    assert budget.status()['model_estimated_and_reserved_usd']==5
+    with pytest.raises(RuntimeError,match='budget'):budget.reserve('compute',1)
+
+
 @pytest.mark.parametrize('amount',[0,-1,float('inf'),float('nan')])
 def test_invalid_reservations_rejected(tmp_path,amount):
     budget=AzureBudget(tmp_path/'budget.sqlite')

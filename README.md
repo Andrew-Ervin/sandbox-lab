@@ -18,7 +18,7 @@ Follow [local setup](docs/LOCAL-SETUP.md), provide your own private credentials,
 
 Source synchronizes between linked headless and developer homes on handoff and every 15 seconds while both are active. Three-way comparison preserves conflicting changes for a user choice. Credentials, dependencies, unsaved buffers and processes stay separate. See [projects](docs/PROJECTS.md).
 
-The runtime keeps one clean spare per recently used role, then releases it after ten minutes without demand. Workspaces suspend after ten idle minutes. Current high-concurrency quotas are guarded by a cumulative $200 testing budget and a $12/hour aggregate compute allowance. This local process is not a production multi-tenant scheduler. See [scaling](docs/SCALING.md) and [Azure runtime](docs/AZURE-SANDBOX-RUNTIME.md).
+The runtime keeps one clean spare per recently used role, then releases it after ten minutes without demand. Workspaces suspend after ten idle minutes. Current high-concurrency quotas are guarded by a cumulative $200 Azure-only testing budget and a $12/hour aggregate compute allowance. This local process is not a production multi-tenant scheduler. See [scaling](docs/SCALING.md) and [Azure runtime](docs/AZURE-SANDBOX-RUNTIME.md).
 
 Project names use 1–4 words from the opening request. Workstations receive a reviewable suggestion after first exit. Thread titles aim for 1–5 words. Opening, renaming or reading a conversation does not promote it in history; new messages do.
 
