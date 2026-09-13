@@ -88,7 +88,7 @@ export function PreviewPanel({
                   )
                 }
               >
-                VS Code
+                Workspace
               </Button>
               <Button
                 size="sm"
@@ -157,7 +157,7 @@ export function PreviewPanel({
               ? 'clipboard-read; clipboard-write; microphone'
               : undefined
           }
-          referrerPolicy="no-referrer"
+          referrerPolicy={preview.ide ? 'no-referrer' : 'strict-origin-when-cross-origin'}
         />
       ) : (
         <div className="preview-message">

@@ -1,7 +1,7 @@
 {
   "name":"pi-ori","displayName":"Pi / Ori","publisher":"sandbox-lab","version":"0.2.0",
   "engines":{"vscode":"^1.95.0"},"main":"./extension.js","activationEvents":["onStartupFinished"],
-  "description":"Sidebar coding chat powered by Pi through Ori in your Coder workspace.",
+  "description":"Sidebar coding chat powered by Pi through Ori in your Azure workstation.",
   "contributes":{
     "commands":[{"command":"lab.openAgent","title":"Pi / Ori: Open Chat","icon":"$(comment-discussion)"},{"command":"lab.openAgentTerminal","title":"Pi / Ori: Open Terminal","icon":"$(terminal)"}],
     "viewsContainers":{"activitybar":[{"id":"lab-agent","title":"Pi / Ori","icon":"agent.svg"}]},

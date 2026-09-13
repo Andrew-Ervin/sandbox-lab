@@ -2,7 +2,7 @@ import tailwindcss from '@tailwindcss/postcss';
 import vinext from 'vinext';
 import { defineConfig } from 'vite';
 
-// Local Python API and Kubernetes; no cloud bindings or public tunnel.
+// Local Python API and private Azure execution; no cloud bindings or public tunnel.
 export default defineConfig({
   css: { postcss: { plugins: [tailwindcss()] } },
   server: {

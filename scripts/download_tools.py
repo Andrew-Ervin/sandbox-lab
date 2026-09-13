@@ -26,12 +26,9 @@ def target(system=None, machine=None):
 def plan(system, arch):
     triple = ('aarch64' if arch == 'arm64' else 'x86_64') + ('-apple-darwin' if system == 'darwin' else '-unknown-linux-gnu')
     return {
-        'kind': 'kind-' + system + '-' + arch,
-        'coder': 'coder_2.36.4_' + system + '_' + arch + ('.zip' if system == 'darwin' else '.tar.gz'),
         'uv': 'uv-' + triple + '.tar.gz',
         'ori': 'ori-linux-' + ('arm64' if arch == 'arm64' else 'x64'),
         'code-server': 'code-server-4.106.3-linux-' + arch + '.tar.gz',
-        'calico': 'calico.yaml',
     }
 
 
@@ -77,9 +74,8 @@ def main():
                 temporary.unlink()
                 raise RuntimeError('Checksum mismatch: ' + asset)
             temporary.replace(path)
-        if name in ('coder', 'uv'):
+        if name == 'uv':
             unpack_file(path, name, bins / name)
-        elif name == 'kind':
             shutil.copyfile(path, bins / name); (bins / name).chmod(0o755)
         elif name == 'ori':
             shutil.copyfile(path, bins / ('ori-linux-' + arch)); (bins / ('ori-linux-' + arch)).chmod(0o755)

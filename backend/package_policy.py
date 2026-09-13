@@ -20,13 +20,6 @@ async def change(data,owner):
         if data.get('override_age'):
             value['overrides']=[v for v in value.get('overrides',[]) if v.get('expires',0)>time.time()]
             value['overrides'].append({'ecosystem':ecosystem,'package':name,'version':version,'expires':int(time.time())+86400,'reason':reason})
-        manifest={'apiVersion':'v1','kind':'ConfigMap','metadata':{'name':'package-policy','namespace':'lab-control'},'data':{'packages.json':json.dumps(value,indent=2)}}
-        process=await asyncio.create_subprocess_exec('kubectl','--kubeconfig',str(STATE/'kubeconfig'),'apply','-f','-',stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
-        try:
-            await asyncio.wait_for(process.communicate(json.dumps(manifest).encode()),20)
-            if process.returncode:raise HTTPException(503,'Could not apply the package policy')
-        finally:
-            if process.returncode is None:process.kill();await process.wait()
         PATH.write_text(json.dumps(value,indent=2)+'\n')
         with (STATE/'package-policy-audit.jsonl').open('a') as log:log.write(json.dumps({'at':time.time(),'owner':owner,'ecosystem':ecosystem,'package':name,'version':version,'override_age':bool(data.get('override_age')),'reason':reason})+'\n')
-    return {'saved':True,'message':'Policy saved. Kubernetes may take about a minute to refresh the gateway policy.'}
+    return {'saved':True,'message':'Policy saved. The package gateway applies the policy to subsequent requests.'}

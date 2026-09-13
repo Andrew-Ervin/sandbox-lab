@@ -54,8 +54,8 @@ def test_linking_creates_only_project_metadata_and_never_reuses_dev_id_for_execu
 async def test_linked_project_chat_keeps_a_distinct_headless_workspace(tmp_path):
     store=SQLiteStore(tmp_path/'db');p=store.link_developer('dev','alice','Developer')
     thread=ThreadMetadata(id='t',created_at=datetime.now(timezone.utc));await store.save_thread(thread,{'owner':'alice'});store.attach_project(thread,'alice',p['id'])
-    assert 'coder_workspace_id' not in thread.metadata
-    thread.metadata['coder_workspace_id']='headless';await store.save_thread(thread,{'owner':'alice'})
+    assert 'workspace_id' not in thread.metadata
+    thread.metadata['workspace_id']='headless';await store.save_thread(thread,{'owner':'alice'})
     assert store.get_project(p['id'],'alice')['workspace_id']=='headless'
     assert store.get_project(p['id'],'alice')['developer_workspace_id']=='dev'
 
@@ -73,14 +73,25 @@ async def test_link_move_changes_association_without_merging_files_or_chat_membe
 def transfer_setup(tmp_path):
     store=SQLiteStore(tmp_path/'db');p=store.link_developer('dev','alice','Developer')
     with store.db:store.db.execute('UPDATE projects SET workspace_id=? WHERE id=?',('headless',p['id']))
-    coder=SimpleNamespace(project_locks={},active=set(),provisioning=set())
+    headless=SimpleNamespace(project_locks={},active=set(),provisioning=set())
     dev=SimpleNamespace(list=AsyncMock(return_value=[{'id':'dev','name':'dev','status':'running'}]),prepare=AsyncMock(),touched={})
-    links=WorkspaceLinks(store,coder,dev)
+    links=WorkspaceLinks(store,headless,dev)
     links.browser.workspace=AsyncMock(return_value={'id':'headless','name':'ai'})
     links.browser.read=AsyncMock(side_effect=[{'files':[file()]},{'files':[file(raw=b'original')]}])
     links.browser.invoke=AsyncMock(return_value={'path':'.lab/imports/test','file_count':1,'bytes':9})
     links.sync.run=AsyncMock(return_value={'state':'synced','file_count':1})
     return store,p,links
+
+
+@pytest.mark.asyncio
+async def test_suggested_display_name_reopens_existing_id(transfer_setup):
+    _,_,links=transfer_setup
+    links.developer.list.return_value=[{'id':'dev','name':'Polymer MD Simulation','status':'stopped'}]
+    workspace=await links.dev_workspace('dev',True)
+    assert workspace['id']=='dev'
+    links.developer.prepare.assert_awaited_once()
+    assert links.developer.prepare.call_args.args[0]['id']=='dev'
+    assert links.developer.prepare.call_args.args[0]['name']=='Polymer MD Simulation'
 
 @pytest.mark.asyncio
 async def test_start_chat_automatically_copies_gui_files_and_keeps_workspaces_separate(transfer_setup):
@@ -108,11 +119,11 @@ async def test_start_chat_allocates_only_when_gui_has_source(transfer_setup):
 @pytest.mark.asyncio
 async def test_failed_or_busy_handoff_does_not_leave_empty_chats(transfer_setup):
     store,p,links=transfer_setup
-    links.coder.active.add('headless')
+    links.headless.active.add('headless')
     with pytest.raises(HTTPException) as e:await links.start_chat(p['id'],'alice')
     assert e.value.status_code==409
     assert store.projects('alice')[0]['threads']==[]
-    links.coder.active.clear();links.sync.run.side_effect=RuntimeError('transport failed')
+    links.headless.active.clear();links.sync.run.side_effect=RuntimeError('transport failed')
     with pytest.raises(RuntimeError):await links.start_chat(p['id'],'alice')
     assert store.projects('alice')[0]['threads']==[]
 
@@ -138,7 +149,7 @@ async def test_open_project_developer_creates_once_without_allocating_headless(t
 async def test_open_project_developer_rejects_archive_and_busy_project(transfer_setup):
     import asyncio
     store,p,links=transfer_setup
-    lock=links.coder.project_locks.setdefault(p['id'],asyncio.Lock())
+    lock=links.headless.project_locks.setdefault(p['id'],asyncio.Lock())
     async with lock:
         with pytest.raises(HTTPException) as error:await links.open_developer(p['id'],'alice')
         assert error.value.status_code==409

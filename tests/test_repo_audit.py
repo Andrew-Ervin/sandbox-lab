@@ -5,7 +5,7 @@ import pytest
 spec=importlib.util.spec_from_file_location('repo_audit',Path(__file__).parents[1]/'scripts/repo_audit.py')
 audit=importlib.util.module_from_spec(spec);spec.loader.exec_module(audit)
 
-@pytest.mark.parametrize('name',['.local/state.json','.env','.env.production','docs/VERIFICATION.md','infra/prod.tfstate','user-apps/app.html','kubeconfig','nested/secret.pem'])
+@pytest.mark.parametrize('name',['.local/state.json','.env','.env.production','docs/VERIFICATION.md','infra/prod.tfstate','infra/prod.tfplan','reports/operations/template.html','user-apps/app.html','kubeconfig','nested/secret.pem'])
 def test_private_paths_are_blocked(name):
     assert audit.findings(name,b'harmless')
 

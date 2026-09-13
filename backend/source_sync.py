@@ -1,6 +1,7 @@
 """Three-way source synchronization; credentials and dependency trees never cross."""
 import asyncio,base64,hashlib,json,re,time
 from .config import ROOT
+from .activity import background_activity
 
 def reconcile(base,chat,developer,blocked=()):
     """Return direction-specific changes and conflicts, including tracked deletions."""
@@ -91,27 +92,29 @@ class SourceSync:
 
     async def poll(self):
         links=self.links
-        projects=[p for p in links.store.projects('local-owner') if p['workspace_id'] and p['developer_workspace_id'] and not p['archived'] and not p['deleting']]
+        projects=[{**p,'owner':owner} for (owner,) in links.store.db.execute('SELECT DISTINCT owner FROM projects').fetchall() for p in links.store.projects(owner) if p['workspace_id'] and p['developer_workspace_id'] and not p['archived'] and not p['deleting']]
         if not projects:return
-        a,b=await asyncio.gather(links.coder.api('GET','/api/v2/workspaces',params={'q':'owner:me'}),links.developer.api('GET','/api/v2/workspaces',params={'q':'owner:me'}))
+        a,b=await asyncio.gather(links.headless.api('GET','/api/v2/workspaces',params={'q':'owner:me'}),links.developer.api('GET','/api/v2/workspaces',params={'q':'owner:me'}))
         chat={w['id']:w for w in a['workspaces'] if not w.get('deleted') and w['latest_build']['status']=='running'}
         developer={w['id']:w for w in b['workspaces'] if not w.get('deleted') and w['latest_build']['status']=='running'}
         for p in projects:
             if p['workspace_id'] not in chat or p['developer_workspace_id'] not in developer:continue
-            lock=links.coder.project_locks.setdefault(p['id'],asyncio.Lock())
+            lock=links.headless.project_locks.setdefault(p['id'],asyncio.Lock())
             if lock.locked():continue
             try:
                 async with lock,links.slots:
-                    p=links.project(p['id'],'local-owner');links.idle(p,'local-owner')
-                    if chat[p['workspace_id']]['template_id']!=links.coder.settings()['template_id']:raise ValueError('Template mismatch')
+                    owner=p['owner'];p=links.project(p['id'],owner);links.idle(p,owner)
+                    if chat[p['workspace_id']]['template_id']!=links.headless.settings()['template_id']:raise ValueError('Template mismatch')
                     # Protect only this transfer. Do not mark status polling/sync as
                     # user activity or wake sleeping workspaces.
                     ids={p['workspace_id'],p['developer_workspace_id']}
-                    links.coder.provisioning.update(ids)
+                    links.headless.provisioning.update(ids)
                     self.background.add(p['id'])
-                    try:await self.run(p,'local-owner',chat[p['workspace_id']],developer[p['developer_workspace_id']])
+                    token=background_activity.set(True)
+                    try:await self.run(p,owner,chat[p['workspace_id']],developer[p['developer_workspace_id']])
                     finally:
-                        self.background.discard(p['id']);links.coder.provisioning.difference_update(ids)
+                        background_activity.reset(token)
+                        self.background.discard(p['id']);links.headless.provisioning.difference_update(ids)
             except Exception as error:
                 from fastapi import HTTPException
                 # Busy projects are expected; the next pass follows completion.

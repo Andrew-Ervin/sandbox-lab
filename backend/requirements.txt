@@ -2,6 +2,7 @@ openai-chatkit==1.6.5
 fastapi
 uvicorn[standard]
 httpx
-kubernetes
 python-dotenv
 PyYAML
+
+PyJWT[crypto]>=2.10.1,<3

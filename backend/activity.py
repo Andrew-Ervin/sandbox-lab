@@ -1,6 +1,8 @@
-"""Persist user activity independently of Coder connection/health traffic."""
+"""Persist user activity independently of Azure connection/health traffic."""
 import json,time
+from contextvars import ContextVar
 from .config import STATE
+background_activity=ContextVar('background_activity',default=False)
 class Activity(dict):
     def __init__(self,name):
         self.path=STATE/(name+'-activity.json')

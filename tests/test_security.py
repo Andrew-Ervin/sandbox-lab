@@ -5,22 +5,6 @@ import pytest
 from chatkit.types import ThreadMetadata, AssistantMessageItem,AssistantMessageContent
 from chatkit.store import NotFoundError
 from backend.store import SQLiteStore
-from backend.compute import pod_manifest
-
-def test_quick_pod_is_restricted_and_ephemeral():
-    p=pod_manifest('test')['spec']; c=p['containers'][0]
-    assert p['automountServiceAccountToken'] is False
-    assert p['securityContext']['runAsNonRoot'] is True
-    assert p['securityContext']['seccompProfile']['type']=='RuntimeDefault'
-    assert not p.get('hostNetwork') and not p.get('hostPID') and not p.get('hostIPC')
-    assert c['securityContext']['capabilities']['drop']==['ALL']
-    assert c['securityContext']['readOnlyRootFilesystem'] is True
-    assert c['securityContext']['allowPrivilegeEscalation'] is False
-    assert all('emptyDir' in v for v in p['volumes'])
-    assert not c.get('envFrom')
-    assert all(e['value'].isdigit() and e['name'].startswith(('SYNC_','ARTIFACT_','QUICK_')) for e in c.get('env',[]))
-    assert not any('TOKEN' in e['name'] or 'KEY' in e['name'] for e in c.get('env',[]))
-    assert c['resources']['limits']['memory']=='768Mi'
 
 @pytest.mark.asyncio
 async def test_store_ownership_and_pagination(tmp_path):
@@ -69,26 +53,88 @@ async def test_local_http_auth_and_csrf():
         assert (await c.post('/api/chatkit',json={},headers={'X-Lab-CSRF':b.json()['csrf'],'X-Lab-Mode':'invalid'})).status_code==400
 
 @pytest.mark.asyncio
-async def test_preview_strips_cookie_and_auth(monkeypatch):
+@pytest.mark.parametrize('kind',['app','ide'])
+async def test_preview_strips_cookie_and_auth(monkeypatch,kind):
     import httpx
     import backend.preview as module
     seen={}
     transport_client=httpx.AsyncClient
     class FakeClient:
-        def __init__(self,**kwargs): pass
+        def __init__(self,**kwargs): self.cookies=httpx.Cookies()
         async def __aenter__(self): return self
         async def __aexit__(self,*_): pass
         from contextlib import asynccontextmanager
         @asynccontextmanager
         async def stream(self,method,url,**kwargs):
             seen.update(kwargs)
-            yield httpx.Response(200,content=b'<h1>preview</h1>',headers={'Content-Type':'text/html','Set-Cookie':'stolen=yes'})
+            yield httpx.Response(200,content=b'<head></head><h1>preview</h1>',headers={'Content-Type':'text/html','Set-Cookie':'stolen=yes'})
     monkeypatch.setattr(module.httpx,'AsyncClient',FakeClient)
-    module.targets[5555]={'kind':'app','upstream_port':5556,'expires':9999999999}
+    target={'kind':kind,'upstream_port':5556,'expires':9999999999}
+    path='/'
+    if kind=='app':
+        target['capability']='test-capability';path='/_lab/test-capability/'
+    module.targets[5555]=target
     async with transport_client(transport=httpx.ASGITransport(app=module.app),base_url='http://127.0.0.1:5555') as c:
-        response=await c.get('/',headers={'Cookie':'lab_session=secret','Authorization':'Bearer secret'})
+        response=await c.get(path,headers={'Cookie':'lab_session=secret','Authorization':'Bearer secret'})
     assert response.status_code==200
     assert 'cookie' not in seen['headers'] and 'authorization' not in seen['headers']
     assert 'set-cookie' not in response.headers
-    assert response.headers['Content-Security-Policy'].startswith('sandbox allow-scripts allow-forms;')
-    assert 'allow-same-origin' not in response.headers['Content-Security-Policy']
+    policy=response.headers['Content-Security-Policy']
+    if kind=='app':
+        assert policy.startswith('sandbox allow-scripts allow-forms;')
+        assert 'allow-same-origin' not in policy
+        assert 'vscode-cdn.net' not in policy
+        assert b'<base href="/_lab/test-capability/">' in response.content
+    else:
+        assert 'https://*.vscode-resource.vscode-cdn.net/home/sandbox/.local/share/code-server/extensions/' in policy
+        assert 'https://*.vscode-resource.vscode-cdn.net;' not in policy
+        assert 'frame-ancestors' in policy
+    assert 'allow-top-navigation' not in policy
+    assert "connect-src 'self'" in policy
+
+
+@pytest.mark.asyncio
+async def test_other_preview_origin_cannot_mutate_app(monkeypatch):
+    import httpx
+    import backend.preview as module
+    monkeypatch.setitem(module.targets,5558,{'kind':'app','capability':'test-capability','upstream_port':1,'expires':9999999999})
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=module.app),base_url='http://127.0.0.1:5558') as client:
+        assert (await client.get('/write')).status_code==404
+        for origin in ['null','http://127.0.0.1:5559','https://evil.example']:
+            assert (await client.post('/_lab/test-capability/write',headers={'origin':origin})).status_code==403
+
+
+@pytest.mark.asyncio
+async def test_opaque_app_relative_assets_use_the_preview_capability(monkeypatch):
+    import httpx
+    import backend.preview as module
+    transport_client=httpx.AsyncClient
+    seen=[]
+    class FakeClient:
+        def __init__(self,**kwargs):self.cookies=httpx.Cookies()
+        async def __aenter__(self):return self
+        async def __aexit__(self,*_):pass
+        from contextlib import asynccontextmanager
+        @asynccontextmanager
+        async def stream(self,method,url,**kwargs):
+            seen.append(url)
+            yield httpx.Response(200,content=b'asset',headers={'Content-Type':'application/javascript'})
+    monkeypatch.setattr(module.httpx,'AsyncClient',FakeClient)
+    monkeypatch.setitem(module.targets,5557,{'kind':'app','capability':'test-capability','upstream_port':5556,'expires':9999999999})
+    async with transport_client(transport=httpx.ASGITransport(app=module.app),base_url='http://127.0.0.1:5557') as client:
+        response=await client.get('/assets/main.js',headers={'Referer':'http://127.0.0.1:5557/_lab/test-capability/'})
+    assert response.status_code==200
+    assert seen==['http://127.0.0.1:5556/assets/main.js']
+
+
+@pytest.mark.asyncio
+async def test_reused_preview_connection_never_replays_upstream_cookies():
+    import httpx
+    from backend.preview import upstream_client
+    target={};client=upstream_client(target)
+    assert upstream_client(target) is client
+    response=httpx.Response(200,headers={'set-cookie':'lab_session=attacker; Path=/'},request=httpx.Request('GET','http://127.0.0.1:4000/'))
+    client.cookies.extract_cookies(response)
+    assert not client.cookies
+    assert 'cookie' not in client.build_request('GET','http://127.0.0.1:4000/').headers
+    await client.aclose()

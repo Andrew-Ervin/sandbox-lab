@@ -1,36 +1,4 @@
 {
-  "kind-darwin-amd64": {
-    "url": "https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-darwin-amd64",
-    "sha256": "a8b3cf77b2ad77aec5bf710d1a2589d9117576132af812885cad41e9dede4d4e"
-  },
-  "kind-darwin-arm64": {
-    "url": "https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-darwin-arm64",
-    "sha256": "88bf554fe9da6311c9f8c2d082613c002911a476f6b5090e9420b35d84e70c5c"
-  },
-  "kind-linux-amd64": {
-    "url": "https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-linux-amd64",
-    "sha256": "eb244cbafcc157dff60cf68693c14c9a75c4e6e6fedaf9cd71c58117cb93e3fa"
-  },
-  "kind-linux-arm64": {
-    "url": "https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-linux-arm64",
-    "sha256": "8e1014e87c34901cc422a1445866835d1e666f2a61301c27e722bdeab5a1f7e4"
-  },
-  "coder_2.36.4_darwin_amd64.zip": {
-    "url": "https://github.com/coder/coder/releases/download/v2.36.4/coder_2.36.4_darwin_amd64.zip",
-    "sha256": "42065d387c8a7ebcc8e0d0b6f269db580d3a9b8fe3d59a4e4e38d86d19fba92e"
-  },
-  "coder_2.36.4_darwin_arm64.zip": {
-    "url": "https://github.com/coder/coder/releases/download/v2.36.4/coder_2.36.4_darwin_arm64.zip",
-    "sha256": "5b7bfd3ad4af63199eb65c3a0cc94bf475ee196bc925af4dbf0e0c658dc79bdf"
-  },
-  "coder_2.36.4_linux_amd64.tar.gz": {
-    "url": "https://github.com/coder/coder/releases/download/v2.36.4/coder_2.36.4_linux_amd64.tar.gz",
-    "sha256": "19c9bb8b81495bc983137a1ae16f447420fb571a9ab0dc5d8fb490118b9073ee"
-  },
-  "coder_2.36.4_linux_arm64.tar.gz": {
-    "url": "https://github.com/coder/coder/releases/download/v2.36.4/coder_2.36.4_linux_arm64.tar.gz",
-    "sha256": "cebf62195f61a66f7bedc203c70b0c5bb99f49f26ff6fa1b1a26ab78aeaff4cd"
-  },
   "uv-aarch64-apple-darwin.tar.gz": {
     "url": "https://github.com/astral-sh/uv/releases/download/0.8.22/uv-aarch64-apple-darwin.tar.gz",
     "sha256": "3f61099e261e449527141dbf125629fab33ad696468c8c90cebbac40185a306c"
@@ -62,9 +30,5 @@
   "code-server-4.106.3-linux-arm64.tar.gz": {
     "url": "https://github.com/coder/code-server/releases/download/v4.106.3/code-server-4.106.3-linux-arm64.tar.gz",
     "sha256": "24960d74e6d101c22d00e87cc8c1fbc721d6e829af309040c3e8f1242a507afc"
-  },
-  "calico.yaml": {
-    "url": "https://raw.githubusercontent.com/projectcalico/calico/v3.31.0/manifests/calico.yaml",
-    "sha256": "1990b1cec14002790718bb960b1b8445eb7b896cd16c32e952309f35a9026981"
   }
 }

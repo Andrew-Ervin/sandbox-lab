@@ -37,30 +37,16 @@ def test_runtime_uses_pods_instead_of_historical_build_success():
     live['unavailable_namespaces']=['lab-dev']
     assert runtime('w','running',live,'lab-dev')=='unknown'
 
-@pytest.mark.asyncio
-async def test_connection_traffic_does_not_extend_idle_but_real_editor_activity_does():
-    from backend.idle import IdleWorkspaces
-    stopped=[]
-    def adapter(names):
-        async def api(method,path,**kwargs):
-            if method=='GET':return {'workspaces':[{'id':n,'last_used_at':datetime.now(timezone.utc).isoformat(),'latest_build':{'status':'running','updated_at':'2020-01-01T00:00:00Z'}} for n in names]}
-            stopped.append(path.split('/')[-2])
-        return SimpleNamespace(api=api,touched={},tasks={},active=set())
-    c=adapter(['ai-idle']);d=adapter(['typing','dev-idle'])
-    async def activity(wid):return time.time() if wid=='typing' else 0
-    d.activity=activity
-    idle=IdleWorkspaces(c,d,SimpleNamespace(active_workspaces=lambda:set()));idle.started=0
-    await idle.reap();assert set(stopped)=={'ai-idle','dev-idle'}
 
 @pytest.mark.asyncio
 async def test_chat_and_quick_never_allocate_a_project(tmp_path,monkeypatch):
-    from backend.chat import LabChat,coder,compute
+    from backend.chat import LabChat,headless,compute
     from backend.store import SQLiteStore
     store=SQLiteStore(tmp_path/'db');chat=LabChat(store)
     import backend.chat as chatmodule
     monkeypatch.setattr(chatmodule,'STATE',tmp_path)
     async def forbidden(*a,**kw):raise AssertionError('No project should be allocated')
-    monkeypatch.setattr(coder,'run',forbidden);monkeypatch.setattr(coder,'workspace',forbidden)
+    monkeypatch.setattr(headless,'run',forbidden);monkeypatch.setattr(headless,'workspace',forbidden)
     responses=iter([{'role':'assistant','content':'Hello'}, {'role':'assistant','tool_calls':[{'id':'c','function':{'name':'run_python','arguments':json.dumps({'code':'print(42)','purpose':'sum'})}}]}, {'role':'assistant','content':'42'}])
     async def completion(*a,**kw):return next(responses)
     async def quick(*a,**kw):return {'stdout':'42','exit_code':0,'artifacts':[]}
@@ -69,4 +55,4 @@ async def test_chat_and_quick_never_allocate_a_project(tmp_path,monkeypatch):
         result=await chat.process(json.dumps({'type':'threads.create','params':{'input':{'content':[{'type':'input_text','text':message}],'attachments':[],'inference_options':{}}}}).encode(),{'owner':'a','mode':'auto'})
         async for _ in result:pass
     page=await store.load_threads(10,None,'asc',{'owner':'a'})
-    assert len(page.data)==2 and all(not t.metadata.get('coder_workspace_id') for t in page.data)
+    assert len(page.data)==2 and all(not t.metadata.get('workspace_id') for t in page.data)

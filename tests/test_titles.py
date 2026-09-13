@@ -18,13 +18,13 @@ async def test_titles_use_opening_only_preserve_ownership_metadata_and_recency(t
  await store.save_item('t1',next_user,context)
  seen=[]
  async def completion(messages,**kwargs):
-  seen.append((messages,kwargs));latest=await store.load_thread('t1',context);latest.metadata['coder_workspace_id']='new-claim';await store.save_thread(latest,context)
+  seen.append((messages,kwargs));latest=await store.load_thread('t1',context);latest.metadata['workspace_id']='new-claim';await store.save_thread(latest,context)
   return {'content':'{"t1":"Interactive Go Counter"}'}
  service=Titles(store,completion);entry=await service.opening('t1','alice')
  assert entry['user']=='Build a Go counter' and 'Later' not in json.dumps(entry)
  assert await service.generate([entry],'alice')==1
  latest=await store.load_thread('t1',context)
- assert latest.title=='Interactive Go Counter' and latest.metadata['coder_workspace_id']=='new-claim'
+ assert latest.title=='Interactive Go Counter' and latest.metadata['workspace_id']=='new-claim'
  before=store.db.execute('select updated from threads where id="t1"').fetchone()[0]
  assert not store.set_generated_title('t1','alice','A second title')
  assert store.db.execute('select updated from threads where id="t1"').fetchone()[0]==before

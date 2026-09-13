@@ -11,12 +11,13 @@ from backend.files import inputs
 async def test_two_chatkit_threads_finish_after_navigation(tmp_path, monkeypatch):
     store=SQLiteStore(tmp_path/'db'); chat=LabChat(store); jobs=Jobs(store)
     gate=asyncio.Event(); entered=0
-    async def completion(messages,tools=True):
+    async def completion(messages,tools=True,**kwargs):
         nonlocal entered
         entered+=1
         await gate.wait()
         return {'role':'assistant','content':'Finished '+messages[-1]['content']}
     monkeypatch.setattr(chat,'completion',completion)
+    monkeypatch.setattr(chat.titles,'schedule',lambda *args:None)
     contexts=[]; subscribers=[]
     for name in ['A','B']:
         context={'owner':'local-owner','mode':'auto'}; contexts.append(context)
@@ -143,7 +144,8 @@ async def test_router_200_rate_limit_retries_before_any_tool_is_returned(monkeyp
     chat.http=httpx.AsyncClient(transport=httpx.MockTransport(handler))
     assert (await chat.completion([{'role':'user','content':'hello'}],tools=False))['content']=='Recovered'
     assert len(calls)==2 and calls[0]==calls[1]
-    assert calls[0]['max_tokens']==4096
+    from backend.limits import value
+    assert calls[0]['max_tokens']==value('CHAT_MAX_OUTPUT_TOKENS')
     await chat.close()
 
 

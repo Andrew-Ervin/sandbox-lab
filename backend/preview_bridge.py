@@ -1,6 +1,15 @@
 """Trusted presentation helpers on the untrusted preview origin, never the app origin."""
 BRIDGE=b'''<script>(()=>{
 let last=0,fit=true,frame=0,applying=false;
+// Static builds have no HMR client. Watch the served HTML revision as a fallback.
+let revision=null,checking=false;
+setInterval(async()=>{
+ if(document.hidden||checking||document.documentElement.dataset.labViewer)return;
+ checking=true;
+ try{const r=await fetch(location.href,{cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(4000)});
+ if(r.ok){const next=r.headers.get('X-Lab-Revision');if(next&&revision&&next!==revision)location.reload();if(next)revision=next;}
+ }catch{}finally{checking=false;}
+},5000);
 function ping(){if(document.hidden||Date.now()-last<5000)return;last=Date.now();parent.postMessage({type:'lab-preview-activity'},'*')}
 ['pointerdown','keydown','wheel'].forEach(x=>addEventListener(x,ping,{passive:true}));
 function init(){

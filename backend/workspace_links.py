@@ -34,8 +34,8 @@ def checked_files(payload):
     return files
 
 class WorkspaceLinks:
-    def __init__(self,store,coder,developer):
-        self.store=store;self.coder=coder;self.developer=developer;self.browser=ProjectFiles(store,coder);self.slots=asyncio.Semaphore(value('SYNC_CONCURRENCY'));self.sync=SourceSync(self)
+    def __init__(self,store,headless,developer):
+        self.store=store;self.headless=headless;self.developer=developer;self.browser=ProjectFiles(store,headless);self.slots=asyncio.Semaphore(value('SYNC_CONCURRENCY'));self.sync=SourceSync(self)
 
     def project(self,pid,owner):
         try:p=self.store.get_project(pid,owner)
@@ -45,15 +45,15 @@ class WorkspaceLinks:
 
     def idle(self,p,owner,except_thread=None):
         tids={r[0] for r in self.store.db.execute('SELECT thread FROM project_threads WHERE project=?',(p['id'],))}
-        if active_threads(self.store,tids-{except_thread},owner) or p['workspace_id'] in self.coder.active or p['workspace_id'] in getattr(self.coder,'native_active',set()) or p['workspace_id'] in self.coder.provisioning:raise HTTPException(409,'Wait for this project’s coding run to finish before syncing')
+        if active_threads(self.store,tids-{except_thread},owner) or p['workspace_id'] in self.headless.active or p['workspace_id'] in getattr(self.headless,'native_active',set()) or p['workspace_id'] in self.headless.provisioning:raise HTTPException(409,'Wait for this project’s coding run to finish before syncing')
 
     async def dev_workspace(self,wid,wake=False):
         ws=next((w for w in await self.developer.list() if w['id']==wid),None)
         if not ws:raise HTTPException(404,'Linked developer workstation no longer exists')
-        if wake and ws['status'] in ('stopped','failed','canceled'):
-            ws=await self.developer.start(ws['name'])
-        if ws['status'] not in ('running','starting','pending'):raise HTTPException(409,'Wait for the developer workstation operation to finish')
-        if wake:await self.developer.prepare(ws)
+        if ws['status'] not in ('running','starting','pending') and not (wake and ws['status'] in ('stopped','failed','canceled')):raise HTTPException(409,'Wait for the developer workstation operation to finish')
+        if wake:
+            await self.developer.prepare(ws)
+            ws={**ws,'status':'running'}
         self.developer.touched[wid]=time.time()
         return ws
 
@@ -65,14 +65,14 @@ class WorkspaceLinks:
 
     async def open_developer(self,pid,owner):
         p=self.project(pid,owner)
-        lock=self.coder.project_locks.setdefault(pid,asyncio.Lock())
+        lock=self.headless.project_locks.setdefault(pid,asyncio.Lock())
         if lock.locked() and pid not in self.sync.background:raise HTTPException(409,'This project is busy; retry when its current operation finishes')
         async with lock,self.slots:
             p=self.project(pid,owner);self.idle(p,owner)
             if p['developer_workspace_id']:
                 ws=await self.dev_workspace(p['developer_workspace_id'],True)
             else:
-                ws=await self.developer.start('project-'+pid.removeprefix('prj_')[:20])
+                ws=await self.developer.start(p['name'],owner=owner)
                 p=self.store.link_developer(ws['id'],owner,ws['name'],pid)
                 await self.developer.prepare(ws)
             chat_path,dev_path=self.paths(p)
@@ -85,7 +85,7 @@ class WorkspaceLinks:
 
     async def sync_chat(self,pid,owner,thread):
         p=self.project(pid,owner)
-        lock=self.coder.project_locks.setdefault(pid,asyncio.Lock())
+        lock=self.headless.project_locks.setdefault(pid,asyncio.Lock())
         if lock.locked() and pid not in self.sync.background:raise HTTPException(409,'This project is busy; retry when its current operation finishes')
         async with lock,self.slots:
             p=self.project(pid,owner);self.idle(p,owner,except_thread=thread.id)
@@ -116,7 +116,7 @@ class WorkspaceLinks:
         return {'id':thread.id,'project_id':pid}
 
     async def resolve(self,pid,owner,path,keep):
-        p=self.project(pid,owner);lock=self.coder.project_locks.setdefault(pid,asyncio.Lock())
+        p=self.project(pid,owner);lock=self.headless.project_locks.setdefault(pid,asyncio.Lock())
         if lock.locked() and pid not in self.sync.background:raise HTTPException(409,'This project is busy')
         async with lock,self.slots:
             p=self.project(pid,owner);self.idle(p,owner)
@@ -129,12 +129,15 @@ class WorkspaceLinks:
         marker=STATE/'developer-project-links-v1.done'
         if marker.exists():return
         try:
-            for ws in await self.developer.list():self.store.link_developer(ws['id'],'local-owner',ws['name'])
+            from .identity import identity
+            for ws in await self.developer.list():
+                owner=self.developer.runtime.record(ws['id']).get('owner') or identity.admin
+                self.store.link_developer(ws['id'],owner,ws['name'])
             marker.write_text('complete')
         except Exception:pass  # A disconnected portal must not delay app startup; explicit linking stays available.
 
-def install_workspace_links(app,store,coder,developer):
-    links=WorkspaceLinks(store,coder,developer)
+def install_workspace_links(app,store,headless,developer):
+    links=WorkspaceLinks(store,headless,developer)
     @app.post('/api/projects/{pid}/developer-workspace')
     async def open_developer(pid:str,request:Request):
         try:return await links.open_developer(pid,request.state.owner)
@@ -149,7 +152,7 @@ def install_workspace_links(app,store,coder,developer):
             old=store.developer_project(wid,request.state.owner)
             for pid in {p for p in [body.project_id,old['id'] if old else None] if p}:
                 p=links.project(pid,request.state.owner);links.idle(p,request.state.owner)
-                if coder.project_locks.setdefault(pid,asyncio.Lock()).locked():raise HTTPException(409,'This project is busy')
+                if headless.project_locks.setdefault(pid,asyncio.Lock()).locked():raise HTTPException(409,'This project is busy')
             return store.link_developer(wid,request.state.owner,ws['name'],body.project_id)
         except NotFoundError:raise HTTPException(404,'Project not found')
         except ValueError as exc:raise HTTPException(409,str(exc))

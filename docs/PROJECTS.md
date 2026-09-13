@@ -4,7 +4,7 @@ A project groups conversations and one shared headless coding environment. Ordin
 
 A project can also link to one developer workstation. **Open in VS Code** creates or resumes that link. Existing developer workstations have project links, and new workstations receive a project automatically. This never assigns the developer workspace ID as the chat execution target.
 
-The environments have separate Coder control planes, namespaces, home volumes, credentials, packages and processes. **Open in VS Code** creates/resumes the developer workstation, synchronizes eligible project source, and opens its working folder. **New chat in project** automatically brings developer source into the separate headless home before the chat starts. Neither flow requires a copy/review step. An empty developer-only project does not allocate headless compute until it has source to continue or the assistant delegates a coding task.
+The environments have separate homes, credentials, packages and processes. They occupy separate Azure Sandboxes. **Open in VS Code** creates/resumes the developer workstation, synchronizes eligible project source, and opens its working folder. **New chat in project** automatically brings developer source into the separate headless home before the chat starts. Neither flow requires a copy/review step. An empty developer-only project does not allocate headless compute until it has source to continue or the assistant delegates a coding task.
 
 ## Ongoing source sync
 
@@ -18,13 +18,13 @@ Limits: 2,000 files, 8 MB per file, 32 MB total, 10,000 scanned entries, two tra
 
 This is eventual file synchronization, not a transactional project filesystem or a collaborative editor. Avoid editing the same files concurrently; saved multi-file changes can be observed partway through. A running dev server may need a rebuild/restart after source changes. For production, use Git revisions, distributed leases and a durable sync queue with audited conflict handling; see `AZURE-IMPLEMENTATION.md`.
 
-Mock sync to OneDrive saves a separate bounded local mirror under ignored local state. No Microsoft service is contacted. Azure Blob, OneLake and OneDrive integrations remain proposals.
+Mock sync to OneDrive saves a separate bounded local mirror under ignored local state. No Microsoft service is contacted. In Azure mode, private Blob stores broker-owned source and quick checkpoints. OneLake and real OneDrive integration remain proposals.
 
 ## Browsing and lifecycle
 
 Apps, files and VS Code open in the right pane. Opening it collapses history; reopening history collapses the preview. The right-hand **Reopen preview** control restores a briefly collapsed iframe without restarting it. Preview sizing, fit, reload and external opening live in its options menu. The history collapse control is inside the sidebar header; resizing remains available by dragging its edge. Collapsed views do not renew the preview lease. App servers still run in the same execution container where their source lives and follow its idle policy.
 
-The current defaults are five idle minutes for headless compute, ten for developer workstations, and two for unused preview listeners. Active runs/setup and recent visible interaction protect their relevant environment. Status polling is read-only and does not count as activity. Local overrides are reported by the assistant's documentation tool and Lab status.
+The current defaults are ten idle minutes for headless compute, ten for developer workstations, and two for unused preview listeners. Active runs/setup and recent visible interaction protect their relevant environment. Status polling is read-only and does not count as activity. Local overrides are reported by the assistant's documentation tool and Lab status.
 
 Deleting a project removes its chats and headless home; an independently linked developer workstation is retained and unlinked. Deleting a workstation retains its project and separate headless environment. Permanent deletion uses the existing confirmation flow.
 
@@ -51,3 +51,13 @@ Internal app and artifact links open the authenticated side preview through nati
 ### App dependencies after source sync
 
 Node app previews started with an npm launch recipe restore dependencies automatically: `npm ci` when a package lock exists, otherwise `npm install` to create one. The restore goes through the existing package gateway and release-age policy. A manifest/lockfile digest avoids repeating it when unchanged; missing `node_modules` always restores. The marker and packages stay in that workspace's home. Failed installs expose an app-start error rather than silently bypassing package policy. Other languages should use a self-restoring launch command (`uv run`, `go run`, `cargo run`, `dotnet run`) or an explicit project startup script; the preview service does not copy their installed environments.
+
+On Azure, migrated npm lockfile tarball URLs pointing to the previous package gateway are normalized to canonical registry URLs and resolved through the configured broker gateway. Locked versions, integrity hashes and dependency graphs remain unchanged; the exact original lockfile is backed up in that workspace’s private state. Vite launch recipes recognize the existing `env` and `taskset` wrappers and explicitly bind port 3000.
+
+## Names and history
+
+Projects receive an AI name of 1–4 words from their starting request. Older eligible projects are backfilled. Workstations receive a suggested name after their first exit; Use name accepts it without changing their immutable workspace ID. Existing workstations also receive suggestions. Manually chosen project names are preserved after acceptance. Conversation titles aim for 1–5 words; longer names are allowed when clarity needs them. Metadata saves and selecting an old chat do not change its history position.
+
+## Personal workspaces
+
+Microsoft Entra tenant/object identity scopes project/history ownership and workspace routes. Existing local data migrates only to the configured operator after SQLite backups. Display names (including accepted AI suggestions with spaces) are labels; reopen, sync and resize use immutable workspace IDs. Workspace lists sort by last explicit use, without changing history ordering on selection. Editor preferences are stored per account and merged using per-workspace baselines. Workspace contents and native coding conversations remain separate. See [Identity](IDENTITY.md) and [Scaling](SCALING.md).

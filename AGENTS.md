@@ -4,7 +4,7 @@ Prefer React and shadcn for frontend changes. Prefer polars to pandas and Plotly
 
 Read README.md and docs/PROJECTS.md before changing workspace ownership or lifecycle. GUI workstations and headless projects keep separate files; Open in VS Code and project-chat entry synchronize eligible source automatically, with ongoing three-way sync while both sides run. Conflicting edits require a user choice; credentials, dependencies and processes stay separate. Ordinary chat and documentation reads must not allocate a project.
 
-Use the configured project engine deliberately: native Coder headless inference and in-workspace Ori/Pi have different credential boundaries. Do not weaken network, package-age or human-approval controls to make a test pass.
+Use the configured project engine deliberately: Azure broker headless inference and in-workspace Ori/Pi have different credential boundaries. Do not weaken network, package-age or human-approval controls to make a test pass.
 
 Keep `.local`, `.env`, credentials, conversations, workspace files and user-generated apps private. Never stage the entire filesystem or copy live state into source. Run `python3 scripts/repo_audit.py --staged` on the exact index before commits. Preserve existing data during migrations; back up before changing saved presentation.
 

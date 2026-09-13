@@ -2,6 +2,10 @@
 // interval before ChatKit emits response.start. Never cancel a background job.
 export class ChatTransport {
   pending = new Map<string, symbol>();
+  subscriptions = new Map<symbol, () => Promise<void>>();
+  async detach() {
+    await Promise.allSettled([...this.subscriptions.values()].map(cancel => cancel()));
+  }
   busy(thread: string | null) {
     return this.pending.has(thread || 'new');
   }
@@ -30,6 +34,7 @@ export class ChatTransport {
     const token = Symbol();
     this.pending.set(key, token);
     const release = () => {
+      this.subscriptions.delete(token);
       if (this.pending.get(key) === token) this.pending.delete(key);
     };
     try {
@@ -40,6 +45,10 @@ export class ChatTransport {
       }
       const reader = response.body.getReader(),
         decoder = new TextDecoder();
+      this.subscriptions.set(token, async () => {
+        release();
+        await reader.cancel('Navigated to another conversation');
+      });
       let prefix = '';
       return new Response(
         new ReadableStream<Uint8Array>({
@@ -61,7 +70,7 @@ export class ChatTransport {
                       event.type === 'thread.created' &&
                       typeof event.thread?.id === 'string'
                     ) {
-                      release();
+                      if (this.pending.get(key) === token) this.pending.delete(key);
                       key = event.thread.id;
                       this.pending.set(key, token);
                       prefix = '';

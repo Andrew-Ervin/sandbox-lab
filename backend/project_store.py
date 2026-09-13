@@ -10,6 +10,7 @@ class ProjectStore:
         CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner);
         CREATE INDEX IF NOT EXISTS idx_project_threads_project ON project_threads(project);
         CREATE TABLE IF NOT EXISTS source_sync_state(project TEXT PRIMARY KEY, body TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS generated_names(id TEXT PRIMARY KEY, kind TEXT, name TEXT, state TEXT);
         CREATE TABLE IF NOT EXISTS thread_preferences(thread TEXT PRIMARY KEY, archived INTEGER NOT NULL DEFAULT 0);
         ''')
         columns={r[1] for r in self.db.execute('PRAGMA table_info(projects)')}
@@ -72,6 +73,7 @@ class ProjectStore:
             if name is not None:
                 if not isinstance(name,str) or not 1<=len(name.strip())<=120:raise ValueError('Use a project name between 1 and 120 characters')
                 self.db.execute('UPDATE projects SET name=? WHERE id=?',(name.strip(),pid))
+                self.db.execute("INSERT INTO generated_names VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,state='manual'",(pid,'project',name.strip(),'manual'))
             if archived is not None:self.db.execute('UPDATE projects SET archived=? WHERE id=?',(int(archived),pid))
 
     def archive_thread(self,tid,owner,archived):
@@ -91,7 +93,7 @@ class ProjectStore:
         if not row or row[0]!=owner:raise NotFoundError('Thread not found')
         existing=self.project_for_thread(thread.id,owner)
         if existing and existing['id']!=project_id:raise ValueError('This conversation already belongs to another project')
-        if thread.metadata.get('coder_workspace_id') and thread.metadata['coder_workspace_id']!=project['workspace_id']:
+        if thread.metadata.get('workspace_id') and thread.metadata['workspace_id']!=project['workspace_id']:
             raise ValueError('Moving an existing workspace would require an explicit file merge')
         with self.db:
             self.db.execute('INSERT OR IGNORE INTO project_threads VALUES (?,?)',(thread.id,project_id))
@@ -102,7 +104,7 @@ class ProjectStore:
     def ensure_project(self,thread,owner):
         project=self.project_for_thread(thread.id,owner)
         if not project:
-            wid=thread.metadata.get('coder_workspace_id')
+            wid=thread.metadata.get('workspace_id')
             row=self.db.execute('SELECT id,owner FROM projects WHERE workspace_id=?',(wid,)).fetchone() if wid else None
             if row and row[1]!=owner:raise NotFoundError('Workspace not owned by this user')
             pid=row[0] if row else 'prj_'+uuid.uuid4().hex
@@ -117,15 +119,15 @@ class ProjectStore:
     def apply_project_metadata(self,thread,owner):
         project=self.project_for_thread(thread.id,owner)
         if not project:return
-        wid=thread.metadata.get('coder_workspace_id')
+        wid=thread.metadata.get('workspace_id')
         if project['workspace_id']:
             if wid and wid!=project['workspace_id']:raise ValueError('Project workspace mismatch')
-            thread.metadata['coder_workspace_id']=project['workspace_id']
+            thread.metadata['workspace_id']=project['workspace_id']
         elif wid:
             self.db.execute('UPDATE projects SET workspace_id=? WHERE id=?',(wid,project['id']))
             # Update siblings without overwriting their messages, titles or agent sessions.
             for tid,body in self.db.execute('SELECT t.id,t.body FROM threads t JOIN project_threads m ON m.thread=t.id WHERE m.project=?',(project['id'],)).fetchall():
-                value=json.loads(body);value.setdefault('metadata',{})['coder_workspace_id']=wid
+                value=json.loads(body);value.setdefault('metadata',{})['workspace_id']=wid
                 self.db.execute('UPDATE threads SET body=? WHERE id=?',(json.dumps(value),tid))
         thread.metadata['project_id']=project['id']
 
@@ -135,11 +137,11 @@ class ProjectStore:
         for body,owner in self.db.execute('SELECT body,owner FROM threads').fetchall():
             thread=ThreadMetadata.model_validate_json(body)
             if self.project_for_thread(thread.id,owner):continue
-            if not thread.metadata.get('coder_workspace_id'):
+            if not thread.metadata.get('workspace_id'):
                 rows=self.db.execute("SELECT body FROM runs WHERE thread=? AND json_extract(body,'$.workspace_id') IS NOT NULL ORDER BY created DESC",(thread.id,)).fetchall()
                 candidate=next((json.loads(r[0]) for r in rows if json.loads(r[0]).get('mode') in ('analysis','app')),None)
                 if not candidate:continue
-                thread.metadata['coder_workspace_id']=candidate['workspace_id']
+                thread.metadata['workspace_id']=candidate['workspace_id']
             self.ensure_project(thread,owner);count+=1
         return count
 

@@ -5,11 +5,11 @@ class Jobs:
     def __init__(self, store, concurrency=None):
         self.store = store
         self.tasks = {}
-        self.slots = asyncio.Semaphore(concurrency or max(1,int(os.getenv("JOB_CONCURRENCY","8"))))
-        self.max_pending=max(1,int(os.getenv("JOB_MAX_PENDING","64")))
+        self.slots = asyncio.Semaphore(concurrency or max(1,int(os.getenv("JOB_CONCURRENCY","128"))))
+        self.max_pending=max(0,int(os.getenv("JOB_MAX_PENDING","0")))
 
     def start(self, stream, context, thread_id=None, *, acknowledge=False):
-        if len(self.tasks)>=self.max_pending: raise RuntimeError('The local job queue is full; retry after a running task finishes.')
+        if self.max_pending and len(self.tasks)>=self.max_pending: raise RuntimeError('The local job queue is full; retry after a running task finishes.')
         job = {'id': 'job_'+uuid.uuid4().hex, 'thread_id': thread_id, 'owner': context['owner'],
                'status': 'queued', 'started': time.time(), 'progress': 'Waiting for capacity'}
         context['job'] = job

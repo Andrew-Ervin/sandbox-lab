@@ -1,0 +1,4 @@
+# Same Polars release as the shared scientific baseline; published 2025-10-02.
+# CPU-compatible wheel avoids AVX assumptions inside Dynamic Sessions Hyper-V.
+polars-runtime-compat==1.34.0 \
+    --hash=sha256:58144c720a9e80c36bd59de11d4d10ea15c80dbbb2ef333c36502e86ca4adf1f

@@ -29,7 +29,7 @@ export function OpenProjectWorkspaceButton({ project, sessionFetch, onRefresh, o
     <Button variant="ghost" size="sm" disabled={busy || project.archived || project.deleting} onClick={() => void open()}
       title="Copy project source and open it in your separate developer workstation">
       {busy ? <LoaderCircle size={15} className="spin" /> : <Monitor size={15} />}
-      {busy ? 'Opening project…' : 'Open in VS Code'}
+      {busy ? 'Opening project…' : 'Open workspace'}
     </Button>
     {error && <p role="alert" className="workspace-open-error">{error}</p>}
   </div>;

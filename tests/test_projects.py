@@ -8,7 +8,7 @@ from backend.store import SQLiteStore
 from backend.projects import write_mock_sync
 
 async def chat(store,id,owner='alice',wid=None):
-    t=ThreadMetadata(id=id,title='Project '+id,created_at=datetime.now(timezone.utc),metadata={'coder_workspace_id':wid} if wid else {})
+    t=ThreadMetadata(id=id,title='Project '+id,created_at=datetime.now(timezone.utc),metadata={'workspace_id':wid} if wid else {})
     await store.save_thread(t,{'owner':owner});return t
 
 @pytest.mark.asyncio
@@ -28,9 +28,9 @@ async def test_migration_groups_shared_workspaces_without_touching_history(tmp_p
 async def test_project_binding_survives_stale_thread_saves_and_is_shared(tmp_path):
     s=SQLiteStore(tmp_path/'db');a=await chat(s,'a');project=s.ensure_project(a,'alice');b=await chat(s,'b');s.attach_project(b,'alice',project['id'])
     stale=await s.load_thread('b',{'owner':'alice'})
-    a.metadata['coder_workspace_id']='shared-ws';await s.save_thread(a,{'owner':'alice'})
+    a.metadata['workspace_id']='shared-ws';await s.save_thread(a,{'owner':'alice'})
     await s.save_thread(stale,{'owner':'alice'})
-    assert (await s.load_thread('b',{'owner':'alice'})).metadata['coder_workspace_id']=='shared-ws'
+    assert (await s.load_thread('b',{'owner':'alice'})).metadata['workspace_id']=='shared-ws'
     assert s.ensure_project(stale,'alice')['workspace_id']=='shared-ws'
     assert len(s.projects('alice'))==1
 
@@ -126,14 +126,15 @@ def test_browser_file_limit_is_explicit_and_export_budget_is_shared_by_subfolder
 
 @pytest.mark.asyncio
 async def test_new_thread_reuses_project_workspace_without_creating_another(tmp_path,monkeypatch):
-    from backend.coder import CoderAgents
+    from backend.azure_adapters import AzureProjects
     s=SQLiteStore(tmp_path/'db');a=await chat(s,'a',wid='shared');p=s.ensure_project(a,'alice');b=await chat(s,'b');s.attach_project(b,'alice',p['id'])
-    coder=CoderAgents();monkeypatch.setattr(coder,'settings',lambda:{'template_id':'template'})
-    calls=[]
-    async def api(method,path,**kw):calls.append(method);return {'id':'shared','template_id':'template','latest_build':{'status':'running'}}
-    monkeypatch.setattr(coder,'api',api)
-    assert await coder.allocate(b,s,{'owner':'alice'})=='shared'
-    assert calls==['GET']
+    from unittest.mock import AsyncMock
+    headless=AzureProjects()
+    monkeypatch.setattr(headless.runtime,'start',AsyncMock(return_value={'id':'shared'}))
+    monkeypatch.setattr(headless.runtime,'create',AsyncMock())
+    assert (await headless.workspace(b,s,{'owner':'alice'}))['id']=='shared'
+    headless.runtime.start.assert_awaited_once_with('shared')
+    headless.runtime.create.assert_not_awaited()
 
 @pytest.mark.asyncio
 async def test_project_routes_enforce_owner_and_create_shared_chat(tmp_path):
@@ -146,14 +147,14 @@ async def test_project_routes_enforce_owner_and_create_shared_chat(tmp_path):
     @app.middleware('http')
     async def identity(request:Request,next):request.state.owner=request.headers.get('test-owner','alice');return await next(request)
     async def live():return {'pods':[],'unavailable_namespaces':[]}
-    coder=SimpleNamespace(project_locks={},active=set(),provisioning=set())
-    install_projects(app,s,coder,SimpleNamespace(get=live))
+    headless=SimpleNamespace(project_locks={},active=set(),provisioning=set())
+    install_projects(app,s,headless,SimpleNamespace(get=live))
     from backend.workspace_links import install_workspace_links
-    install_workspace_links(app,s,coder,SimpleNamespace())
+    install_workspace_links(app,s,headless,SimpleNamespace())
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test') as client:
         for method,path in [('GET','files'),('GET','file?path=main.py'),('POST','open'),('POST','threads'),('POST','sync-onedrive')]:
             assert (await client.request(method,f'/api/projects/{p["id"]}/{path}',headers={'test-owner':'bob'})).status_code==404
         result=await client.post(f'/api/projects/{p["id"]}/threads');assert result.status_code==200
         child=await s.load_thread(result.json()['id'],{'owner':'alice'})
-        assert child.metadata['coder_workspace_id']=='shared'
+        assert child.metadata['workspace_id']=='shared'
         assert child.metadata['project_id']==p['id']

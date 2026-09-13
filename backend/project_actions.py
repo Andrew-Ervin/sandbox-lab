@@ -1,10 +1,11 @@
-"""Owner-scoped project/chat actions. Deletion is retryable until Coder confirms it."""
+"""Owner-scoped project/chat actions. Deletion is retryable until Azure confirms it."""
 import asyncio,json,re,shutil,httpx
 from fastapi import HTTPException,Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel,ConfigDict,StrictBool
 from chatkit.store import NotFoundError
-from .coder import CoderAPIError
+from .headless import HeadlessAPIError
+from .azure_transport import AzureError
 from .config import STATE
 from .project_deletions import ProjectDeletions,active_threads,cleanup_paths,remove_paths,purge_records
 
@@ -22,7 +23,7 @@ class ThreadUpdate(BaseModel):
     archived:StrictBool
 
 
-def install_project_actions(app,store,coder):
+def install_project_actions(app,store,headless):
     def owned(pid,owner):
         try:return store.get_project(pid,owner)
         except NotFoundError:raise HTTPException(404,'Project not found')
@@ -39,7 +40,7 @@ def install_project_actions(app,store,coder):
         owner=request.state.owner;owned(pid,owner)
         tids={r[0] for r in store.db.execute('SELECT thread FROM project_threads WHERE project=?',(pid,))}
         if body.archived:idle(tids,owner)
-        if coder.project_locks.setdefault(pid,asyncio.Lock()).locked():raise HTTPException(409,'This project is busy. Try again after the operation finishes.')
+        if headless.project_locks.setdefault(pid,asyncio.Lock()).locked():raise HTTPException(409,'This project is busy. Try again after the operation finishes.')
         try:store.update_project(pid,owner,name=body.name,archived=body.archived)
         except ValueError as exc:raise HTTPException(409,str(exc))
         return store.get_project(pid,owner)
@@ -60,7 +61,7 @@ def install_project_actions(app,store,coder):
         try:await store.load_thread(tid,{'owner':request.state.owner})
         except NotFoundError:raise HTTPException(404,'Conversation not found')
         p=store.project_for_thread(tid,request.state.owner)
-        if p and (p['deleting'] or coder.project_locks.setdefault(p['id'],asyncio.Lock()).locked()):raise HTTPException(409,'This project is busy. Try again after the operation finishes.')
+        if p and (p['deleting'] or headless.project_locks.setdefault(p['id'],asyncio.Lock()).locked()):raise HTTPException(409,'This project is busy. Try again after the operation finishes.')
         idle({tid},request.state.owner);purge({tid})
         return {'status':'deleted'}
 
@@ -68,34 +69,34 @@ def install_project_actions(app,store,coder):
         p=owned(pid,owner)
         tids={r[0] for r in store.db.execute('SELECT thread FROM project_threads WHERE project=?',(pid,))}
         idle(tids,owner)
-        lock=coder.project_locks.setdefault(pid,asyncio.Lock())
+        lock=headless.project_locks.setdefault(pid,asyncio.Lock())
         if lock.locked():raise HTTPException(409,'This project is busy. Try again after the operation finishes.')
         async with lock:
             wid=p['workspace_id']
             if wid:
-                if wid in coder.active or wid in getattr(coder,'native_active',set()) or wid in coder.provisioning:raise HTTPException(409,'The workspace is busy. Wait for it to finish.')
+                if wid in headless.active or wid in getattr(headless,'native_active',set()) or wid in headless.provisioning:raise HTTPException(409,'The workspace is busy. Wait for it to finish.')
                 try:
-                    try:ws=await coder.api('GET','/api/v2/workspaces/'+wid)
-                    except CoderAPIError as exc:
+                    try:ws=await headless.api('GET','/api/v2/workspaces/'+wid)
+                    except (HeadlessAPIError,AzureError) as exc:
                         if exc.status_code not in (404,410):raise
                         ws={'deleted':True}
                     if not ws.get('deleted') and ws.get('latest_build',{}).get('status')!='deleted':
-                        if ws['template_id']!=coder.settings()['template_id']:raise HTTPException(403,'Headless template mismatch')
+                        if ws['template_id']!=headless.settings()['template_id']:raise HTTPException(403,'Headless template mismatch')
                         status=ws['latest_build']['status']
                         if status in ('starting','stopping','pending','canceling'):raise HTTPException(409,'Waiting for the current workspace operation to finish')
                         if status in ('failed','canceled') and ws['latest_build'].get('transition')=='delete' and operation['submitted']:
-                            raise HTTPException(422,'Coder could not delete the workspace. Inspect its failed build, then retry deletion.')
+                            raise HTTPException(422,'Azure could not delete the workspace. Inspect its failed build, then retry deletion.')
                         tids={r[0] for r in store.db.execute('SELECT thread FROM project_threads WHERE project=?',(pid,))}
                         idle(tids,owner)
-                        if wid in coder.active or wid in getattr(coder,'native_active',set()) or wid in coder.provisioning:raise HTTPException(409,'The workspace is busy. Wait for it to finish.')
+                        if wid in headless.active or wid in getattr(headless,'native_active',set()) or wid in headless.provisioning:raise HTTPException(409,'The workspace is busy. Wait for it to finish.')
                         if status!='deleting':
                             deletions.submitted(pid)
-                            await coder.api('POST','/api/v2/workspaces/'+wid+'/builds',json={'transition':'delete'})
+                            await headless.api('POST','/api/v2/workspaces/'+wid+'/builds',json={'transition':'delete'})
                         return {'status':'deleting','phase':'Deleting workspace and its storage'}
-                except (RuntimeError,asyncio.TimeoutError,httpx.HTTPError):raise HTTPException(503,'Coder could not confirm deletion. Project history retained; retry deletion to continue.')
+                except (RuntimeError,asyncio.TimeoutError,httpx.HTTPError):raise HTTPException(503,'Azure could not confirm deletion. Project history retained; retry deletion to continue.')
             tids={r[0] for r in store.db.execute('SELECT thread FROM project_threads WHERE project=?',(pid,))}
             idle(tids,owner)
-            # Coder has confirmed removal. Disk cleanup runs off the request/event loop.
+            # Azure has confirmed removal. Disk cleanup runs off the request/event loop.
             paths=cleanup_paths(store,tids,STATE)
             if re.fullmatch(r'prj_[a-f0-9]{32}',pid):paths.append(STATE/'mock-onedrive'/'Projects'/pid)
             await asyncio.to_thread(remove_paths,paths)
@@ -113,7 +114,7 @@ def install_project_actions(app,store,coder):
     async def delete_project(pid:str,request:Request,body:ProjectDelete):
         try:
             p=store.get_project(pid,request.state.owner)
-            if coder.project_locks.setdefault(pid,asyncio.Lock()).locked():raise HTTPException(409,'This project is busy. Try again after the operation finishes.')
+            if headless.project_locks.setdefault(pid,asyncio.Lock()).locked():raise HTTPException(409,'This project is busy. Try again after the operation finishes.')
         except NotFoundError:
             try:deletions.get(pid,request.state.owner)
             except NotFoundError:raise HTTPException(404,'Project not found')
