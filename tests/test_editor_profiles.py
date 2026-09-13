@@ -103,3 +103,11 @@ def test_profile_migration_never_follows_backup_or_temp_symlink(tmp_path,monkeyp
         with pytest.raises(ValueError,match='Unsafe'):preferences.apply({'settings':{}})
     else:preferences.apply({'settings':{}})
     assert victim.read_text()=='preserve'
+
+@pytest.mark.parametrize('value',[[],None,12,'settings'])
+def test_non_object_project_settings_do_not_block_profile(tmp_path,monkeypatch,value):
+    user=tmp_path/'User';user.mkdir();workspace=tmp_path/'settings.json';workspace.write_text(json.dumps(value))
+    monkeypatch.setattr(preferences,'USER',user);monkeypatch.setattr(preferences,'WORKSPACE',workspace)
+    assert preferences.export()['settings']=={}
+    preferences.apply({'settings':{}})
+    assert json.loads(workspace.read_text())==value

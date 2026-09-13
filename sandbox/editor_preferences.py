@@ -38,7 +38,8 @@ def export():
     bindings=read(USER/'keybindings.json',[])
     extensions=read(USER.parent/'extensions/extensions.json',[])
     portable=settings(read(USER/'settings.json',{}))
-    portable.update({k:v for k,v in read(WORKSPACE,{}).items() if k in APPEARANCE})
+    workspace=read(WORKSPACE,{})
+    portable.update({k:v for k,v in (workspace.items() if isinstance(workspace,dict) else []) if k in APPEARANCE})
     return {'settings':portable, 'keybindings':bindings if isinstance(bindings,list) and len(bindings)<=250 else [],
         'extensions':sorted({e.get('identifier',{}).get('id','').lower() for e in extensions if re.fullmatch(r'[\w-]+\.[\w-]+',e.get('identifier',{}).get('id',''))}), 'layout':state}
 
@@ -63,6 +64,7 @@ def apply(value):
     # Earlier agents wrote account appearance into project settings. Back up
     # those overrides and let the shared user profile take effect on reopen.
     overrides=read(WORKSPACE,{})
+    if not isinstance(overrides,dict):overrides={}
     if any(k in APPEARANCE for k in overrides) and not WORKSPACE.is_symlink():
         backup=WORKSPACE.with_suffix('.json.before-account-profile')
         try:

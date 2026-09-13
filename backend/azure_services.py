@@ -25,12 +25,12 @@ def packages():
     return _packages
 
 
-def model_reservation(runtime, body):
+def model_reservation(runtime, body, catalog_version=None):
     prices = runtime.config.get('model_prices', {})
     from .config import MODEL
     selected=body.get('model',MODEL)
     from .workspace_models import price
-    try:prices=price(selected)
+    try:prices=price(selected,catalog_version) if catalog_version else price(selected)
     except RuntimeError:
         if prices.get('model')!=selected or not prices.get('prompt') or not prices.get('completion'):
             raise RuntimeError('Verify current prices for the selected model before calling it.')
@@ -106,7 +106,7 @@ async def serve(runtime, record, ready=None):
                             previews.renew_workspace(record['id'])
                             protocol = path.rsplit('/', 1)[-1]
                             body = gateway.prepare_body(json.loads(raw),auth) if protocol == 'completions' else gateway.prepare_native(json.loads(raw), protocol,auth)
-                            charge = runtime.budget.reserve('model',model_reservation(runtime,body))
+                            charge = runtime.budget.reserve('model',model_reservation(runtime,body,auth.get('catalog')))
                             response = await model_client.post(path,json=body,headers={'Authorization':authorization})
                         else: raise ValueError('Service denied')
                         if len(response.content)>250_000_000: raise ValueError('Service response too large')

@@ -200,6 +200,7 @@ class AzureQuick:
         from .scaling import WarmPolicy
         self.runtime = runtime(); self.ready = False; self.error = None
         self.slots = asyncio.Semaphore(self.runtime.profile('quick')['active_limit']); self.queued = 0; self.executing = 0
+        self.thread_locks = {}
         self.policy = WarmPolicy(0,0,600,minimum=0); self.refill = asyncio.Event()
 
     async def pool(self):
@@ -218,9 +219,14 @@ class AzureQuick:
     async def quick(self, code, run, store, input_files=None):
         from .files import inputs
         from . import checkpoints
+        from .identity import current_owner
+        import hashlib
+        owner=current_owner.get()
+        if not owner:raise RuntimeError('Python execution requires a signed-in owner')
+        identity=hashlib.sha256((owner+'\0'+run['thread_id']).encode()).hexdigest()
         self.queued += 1; started = time.monotonic(); entered = False; ws = None; completed = False
         try:
-            async with self.slots:
+            async with self.thread_locks.setdefault(identity,asyncio.Lock()), self.slots:
                 entered = True; self.queued -= 1; self.executing += 1
                 run['timings'] = {'queue_seconds':time.monotonic()-started}
                 try:
@@ -229,7 +235,8 @@ class AzureQuick:
                         saved = await self.runtime.storage.load('chats',run['thread_id'])
                         if saved: checkpoint_files = checkpoints.validate(saved['files'])
                     phase=time.monotonic()
-                    ws = await self.runtime.create('quick','quick-'+uuid.uuid4().hex[:12],disposable=True)
+                    ws = await self.runtime.create('quick','chat-python-'+identity,disposable=True,owner=owner)
+                    record=self.runtime.record(ws['id']);record['thread_id']=run['thread_id'];self.runtime.save(record)
                     run['timings']['workspace_seconds']=time.monotonic()-phase
                     phase=time.monotonic()
                     run.update(pod=ws['name'],status='running',compute_provider='azure'); store.save_run(run)
@@ -251,8 +258,8 @@ class AzureQuick:
                     if ws:
                         phase=time.monotonic()
                         if completed:
-                            self.runtime.quick_cleanup.schedule(ws['id'])
-                            run['timings']['cleanup_deferred']=True
+                            self.runtime.touch(ws['id'])
+                            run['timings']['conversation_scoped']=True
                         else:await self.runtime.stop(ws['id'],delete=True)
                         run['timings']['cleanup_seconds']=time.monotonic()-phase
                     self.executing -= 1

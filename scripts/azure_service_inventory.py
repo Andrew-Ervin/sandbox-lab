@@ -23,11 +23,15 @@ def inventory(config, credential):
     if resources.get('nextLink'):raise ValueError('Inventory exceeds one bounded page')
     def describe(r):
         kind=r['type'].lower();rid=r['id'];result={'name':r['name'],'type':r['type'],'region':r.get('location'),'sku':(r.get('sku') or {}).get('name'),'metrics':{},'errors':[]}
-        versions={'microsoft.app/sandboxgroups':'2026-02-01-preview','microsoft.storage/storageaccounts':'2023-05-01','microsoft.containerregistry/registries':'2023-07-01','microsoft.managedidentity/userassignedidentities':'2023-01-31'}
+        versions={'microsoft.app/sessionpools':'2025-07-01','microsoft.app/sandboxgroups':'2026-02-01-preview','microsoft.storage/storageaccounts':'2023-05-01','microsoft.containerregistry/registries':'2023-07-01','microsoft.managedidentity/userassignedidentities':'2023-01-31'}
         if kind not in versions:return {**result,'status':'Unreviewed resource type'}
         try:
             detail=get(rid,versions[kind]);p=detail.get('properties',{});result['status']=p.get('provisioningState','Present')
-            if kind=='microsoft.app/sandboxgroups':
+            if kind=='microsoft.app/sessionpools':
+                result['metrics']={'containerType':p.get('containerType'),'maxConcurrentSessions':p.get('scaleConfiguration',{}).get('maxConcurrentSessions'),
+                    'cooldownSeconds':p.get('dynamicPoolConfiguration',{}).get('lifecycleConfiguration',{}).get('cooldownPeriodInSeconds'),
+                    'network':p.get('sessionNetworkConfiguration',{}).get('status'),'billing':'Allocated session-hours, rounded up' if p.get('containerType')=='PythonLTS' else 'Dedicated compute and session-management charges'}
+            elif kind=='microsoft.app/sandboxgroups':
                 result['metrics']={k:p.get(k) for k in ('defaultCpu','defaultMemory','defaultDisk','defaultTimeoutSeconds','maxSandboxCount','enableDetailedMetrics')}
             elif kind=='microsoft.storage/storageaccounts':
                 result['metrics']={k:p.get(k) for k in ('accessTier','allowBlobPublicAccess','minimumTlsVersion')}

@@ -35,6 +35,15 @@ def install_project_actions(app,store,headless):
         remove_paths(cleanup_paths(store,tids,STATE))
         with store.db:purge_records(store,tids)
 
+    async def remove_python(tids,owner):
+        control=getattr(headless,'runtime',None)
+        if control is None:return
+        for record in control.records('quick'):
+            if record.get('owner')==owner and record.get('thread_id') in tids and record['state']!='deleted':
+                await control.stop(record['id'],delete=True)
+        if control.storage.enabled:
+            for tid in tids:await control.storage.delete('chats',tid)
+
     @app.patch('/api/projects/{pid}')
     async def update_project(pid:str,request:Request,body:ProjectUpdate):
         owner=request.state.owner;owned(pid,owner)
@@ -62,7 +71,9 @@ def install_project_actions(app,store,headless):
         except NotFoundError:raise HTTPException(404,'Conversation not found')
         p=store.project_for_thread(tid,request.state.owner)
         if p and (p['deleting'] or headless.project_locks.setdefault(p['id'],asyncio.Lock()).locked()):raise HTTPException(409,'This project is busy. Try again after the operation finishes.')
-        idle({tid},request.state.owner);purge({tid})
+        idle({tid},request.state.owner)
+        await remove_python({tid},request.state.owner)
+        purge({tid})
         return {'status':'deleted'}
 
     async def delete_step(pid,owner,operation):
@@ -97,6 +108,7 @@ def install_project_actions(app,store,headless):
             tids={r[0] for r in store.db.execute('SELECT thread FROM project_threads WHERE project=?',(pid,))}
             idle(tids,owner)
             # Azure has confirmed removal. Disk cleanup runs off the request/event loop.
+            await remove_python(tids,owner)
             paths=cleanup_paths(store,tids,STATE)
             if re.fullmatch(r'prj_[a-f0-9]{32}',pid):paths.append(STATE/'mock-onedrive'/'Projects'/pid)
             await asyncio.to_thread(remove_paths,paths)

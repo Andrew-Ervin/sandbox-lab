@@ -52,3 +52,26 @@ def test_issued_catalog_snapshot_survives_refresh_and_expires(monkeypatch):
     assert catalog.resolve(version)==ids
     monkeypatch.setattr(catalog.time,'time',lambda:4601)
     assert catalog.resolve(version) is None
+
+def test_retained_snapshot_keeps_price_for_delisted_model(monkeypatch):
+    monkeypatch.setattr(catalog,'_versions',{})
+    monkeypatch.setattr(catalog.time,'time',lambda:1000)
+    monkeypatch.setattr(catalog,'_updated',1000)
+    monkeypatch.setattr(catalog,'_catalog',catalog.accept([entry(),entry('old/model',completion='.0009')]))
+    version,_=catalog.snapshot()
+    monkeypatch.setattr(catalog,'_catalog',catalog.accept([entry()]))
+    assert catalog.price('old/model',version)['completion']==.0009
+    assert model_reservation(SimpleNamespace(config={}),{'model':'old/model','max_tokens':10},version)>.009
+    monkeypatch.setattr(catalog.time,'time',lambda:4601)
+    with pytest.raises(RuntimeError):catalog.price('old/model',version)
+
+def test_price_change_creates_new_snapshot_without_overwriting_issued_price(monkeypatch):
+    monkeypatch.setattr(catalog,'_versions',{})
+    monkeypatch.setattr(catalog.time,'time',lambda:1000)
+    monkeypatch.setattr(catalog,'_updated',1000)
+    monkeypatch.setattr(catalog,'_catalog',catalog.accept([entry(completion='.0001')]))
+    first,_=catalog.snapshot()
+    monkeypatch.setattr(catalog,'_catalog',catalog.accept([entry(completion='.0002')]))
+    second,_=catalog.snapshot()
+    assert first!=second
+    assert catalog.price(MODEL,first)['completion']==.0001

@@ -46,11 +46,12 @@ async def refresh():
 def snapshot():
     if not _catalog or time.time()-_updated>86400:return None
     ids=sorted(_catalog)
-    version=hashlib.sha256(json.dumps(ids).encode()).hexdigest()
+    prices={ident:dict(_catalog[ident]['pricing']) for ident in ids}
+    version=hashlib.sha256(json.dumps(prices,sort_keys=True).encode()).hexdigest()
     now=time.time()
     for old in list(_versions):
         if _versions[old][0]<=now:del _versions[old]
-    _versions[version]=(now+3600,ids)
+    _versions[version]=(now+3600,ids,prices)
     return version,ids
 
 def resolve(version):
@@ -60,6 +61,10 @@ def resolve(version):
     return current[1] if current and current[0]==version else None
 
 def metadata():return list(_catalog.values())
-def price(model):
+def price(model,version=None):
+    if version is not None:
+        value=_versions.get(version)
+        if value and value[0]>time.time() and model in value[2]:return value[2][model]
+        raise RuntimeError('Issued model prices are unavailable')
     if snapshot() is None or model not in _catalog:raise RuntimeError('Current model prices are unavailable')
     return _catalog[model]['pricing']

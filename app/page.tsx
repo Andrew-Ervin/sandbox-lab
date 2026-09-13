@@ -10,6 +10,8 @@ import {
 } from 'react';
 import { ChatKit, useChatKit } from '@openai/chatkit-react';
 import { CodingSessionStrip } from '@/components/coding-session-strip';
+import { loadChatKit } from '@/lib/chatkit-loader';
+import { ThreadNavigation } from '@/lib/thread-navigation';
 import { ChatTransport } from '@/lib/chat-transport';
 import {
   Box,
@@ -163,15 +165,8 @@ export default function Home() {
   const [boot, setBoot] = useState<Boot | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
-    const script = document.createElement('script');
-    script.src =
-      'https://cdn.platform.openai.com/deployments/chatkit/chatkit.js';
-    script.async = true;
-    script.onerror = () =>
-      setError(
-        'Chat could not load. Check your connection and reload.',
-      );
-    document.head.appendChild(script);
+    let active = true;
+    void loadChatKit().catch((e: Error) => { if (active) setError(e.message); });
     fetch('/api/bootstrap', { method: 'POST' })
       .then((r) => {
         if (!r.ok && r.status!==401) throw Error('Could not connect. Please retry.');
@@ -180,7 +175,7 @@ export default function Home() {
       .then(setBoot)
       .catch((e) => setError(e.message));
     return () => {
-      script.remove();
+      active = false;
     };
   }, []);
   if(boot?.signin_required)return <div className="connecting"><Box size={30}/><h1>Welcome back</h1><p>Sign in to open your chats, projects and workspaces.</p><Button onClick={()=>window.location.assign(boot.login_url||'/api/auth/login')}>Sign in with Microsoft</Button></div>;
@@ -201,12 +196,14 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
   const { openPreview: showPreviewPane } = panes;
   const [chatReady, setChatReady] = useState(false);
   const [chatSlow, setChatSlow] = useState(false);
+  const [chatEpoch, setChatEpoch] = useState(0);
+  const recovering = useRef(false);
+  const [threadLoading, setThreadLoading] = useState(false);
   useEffect(() => {
-    if (chatReady) { setChatSlow(false); return; }
+    if (chatReady && !threadLoading) { setChatSlow(false); return; }
     const timer = window.setTimeout(() => setChatSlow(true), 30000);
     return () => window.clearTimeout(timer);
-  }, [chatReady]);
-  const [threadLoading, setThreadLoading] = useState(false);
+  }, [chatReady, threadLoading, chatEpoch]);
   const transport = useRef(new ChatTransport());
   const loadedThread = useRef<string | null>(null);
   const lastJobSync = useRef('');
@@ -298,7 +295,9 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
   const filesRequest = useRef(0);
   const [projectId, setProjectId] = useState<string | null>(null);
   const streaming = useRef(false);
-  const threadSelection = useRef(0);
+  const navigation = useRef(new ThreadNavigation());
+  const navigating = useRef(false);
+  const loadCompletion = useRef<{ id: string | null; resolve: () => void; reject: (error: Error) => void } | null>(null);
   const threadRef = useRef(thread);
   threadRef.current = thread;
   const [error, setError] = useState('');
@@ -699,15 +698,20 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
           );
       }
     },
-    onReady: () => setChatReady(true),
+    onReady: () => {
+      setChatReady(true);
+      if (recovering.current) { recovering.current = false; selectThread(thread); }
+    },
     onThreadLoadStart: ({ threadId }) => {
-      if (threadId !== loadedThread.current) setThreadLoading(true);
+      if (!navigating.current && threadId !== loadedThread.current) setThreadLoading(true);
     },
     onThreadLoadEnd: ({ threadId }) => {
       loadedThread.current = threadId;
-      setThreadLoading(false);
+      if (loadCompletion.current?.id === threadId) loadCompletion.current.resolve();
+      if (!navigating.current) setThreadLoading(false);
     },
     onThreadChange: ({ threadId }) => {
+      if (navigating.current && threadId !== navigation.current.requested) return;
       setThread(threadId);
       void refresh();
     },
@@ -720,7 +724,8 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
       void refresh();
     },
     onError: ({ error }) => {
-      setThreadLoading(false);
+      loadCompletion.current?.reject(error);
+      if (!navigating.current) setThreadLoading(false);
       setError(error.message);
     },
   });
@@ -742,32 +747,39 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
     { enabled: Boolean(thread) && view === 'chat' },
   );
   const selectThread = (id: string | null) => {
-    const selection = ++threadSelection.current;
+    navigating.current = true;
     filesRequest.current++;
     setFiles([]);
     setProjectId(null);
-    setThreadLoading(Boolean(id) && id !== loadedThread.current);
+    setThreadLoading(true);
     streaming.current = false;
     setView('chat');
     setPreview(null);
     setThread(id);
-    void (async () => {
+    void navigation.current.select(id, async (target) => {
+      await transport.current.detach();
+      if (chatReady && target === loadedThread.current) return;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let completion: NonNullable<typeof loadCompletion.current>;
+      const loaded = new Promise<void>((resolve, reject) => {
+        completion = { id: target, resolve, reject };
+        loadCompletion.current = completion;
+        timer = setTimeout(() => reject(Error('Conversation loading timed out. Retry chat to reconnect.')), 25000);
+      });
       try {
-        await transport.current.detach();
-        if (selection !== threadSelection.current) return;
-        await chat.setThreadId(id);
-      } catch (e) {
-        if (selection === threadSelection.current) {
-          setThreadLoading(false);
-          setError((e as Error).message);
-        }
+        await Promise.all([chat.setThreadId(target).then(() => {
+          if (target === null && loadCompletion.current === completion) { loadedThread.current = null; completion.resolve(); }
+        }), loaded]);
       } finally {
-        // ChatKit normally clears this through onThreadLoadEnd.  Clear the
-        // local transition as well so a missed terminal event cannot leave a
-        // newly created or older conversation behind a permanent overlay.
-        if (selection === threadSelection.current) setThreadLoading(false);
+        clearTimeout(timer);
+        if (loadCompletion.current === completion!) loadCompletion.current = null;
       }
-    })();
+    }, (error) => {
+      navigating.current = Boolean(error);
+      setThreadLoading(Boolean(error));
+      if (error) { setError(error.message); setChatSlow(true); }
+      else loadedThread.current = id;
+    });
   };
   const openProject = (id: string | null) => {
     setSelectedProject(id);
@@ -1150,21 +1162,30 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                     <span className="skeleton-card" />
                     <p>
                       <LoaderCircle size={14} className="spin" />
-                      {threadLoading
-                        ? 'Loading conversation…'
-                        : chatSlow ? 'Chat did not finish loading.' : 'Preparing chat…'}
+                      {chatSlow ? 'Chat did not finish loading.' : threadLoading ? 'Loading conversation…' : 'Preparing chat…'}
                     </p>
-                    {chatSlow && !threadLoading && <div className="space-y-3 text-sm text-muted-foreground">
+                    {chatSlow && <div className="space-y-3 text-sm text-muted-foreground">
                       <p>The chat service may be unavailable or blocked by the browser. Your saved chats are retained; Apps, workspaces and Operations remain available.</p>
-                      <Button variant="outline" onClick={() => location.reload()}>Reload chat</Button>
+                      <Button variant="outline" onClick={() => {
+                        loadCompletion.current?.reject(Error('Chat reconnecting'));
+                        loadCompletion.current = null;
+                        navigation.current.version++;
+                        navigation.current = new ThreadNavigation();
+                        navigating.current = false;
+                        recovering.current = true;
+                        setChatReady(false); setThreadLoading(false); setChatSlow(false);
+                        void transport.current.detach();
+                        void loadChatKit().then(() => setChatEpoch((n) => n + 1)).catch((e: Error) => setError(e.message));
+                      }}>Retry chat</Button>
                     </div>}
                   </div>
                 )}
-                <div inert={threadLoading} aria-hidden={threadLoading || undefined} style={{ height: '100%', width: '100%', minWidth: 0 }}>
+                <div inert={!chatReady || threadLoading} aria-hidden={!chatReady || threadLoading || undefined} style={{ height: '100%', width: '100%', minWidth: 0 }}>
                 <ChatKit
+                  key={chatEpoch}
                   control={chat.control}
                   className="chat-surface"
-                  style={{ opacity: threadLoading ? 0 : 1 }}
+                  style={{ opacity: !chatReady || threadLoading ? 0 : 1 }}
                 />
                 </div>
               </div>
