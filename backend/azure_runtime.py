@@ -465,21 +465,45 @@ class AzureRuntime:
         if wid in self.resizing or self.active_commands.get(wid):raise RuntimeError('Wait for the current workspace operation to finish')
         await self.start(wid)
         self.resizing.add(wid)
+        remote='/tmp/lab-home-'+uuid.uuid4().hex+'.parts'
+        local=self.root/'home-transfers'/(wid+'-'+uuid.uuid4().hex+'.tgz')
+        local.parent.mkdir(exist_ok=True,mode=0o700)
         try:
-            # A snapshot cannot change a Sandbox tier.  Copy only durable source
-            # to Blob, then rebuild a clean home and re-apply the portable editor
-            # profile.  The previous stopped sandbox remains a recovery point.
-            # This avoids serializing caches and node_modules (which made a
-            # nominal size change wait for multi-gigabyte home transfers).
-            if not self.storage.enabled:raise RuntimeError('Fast resize needs the approved Blob source checkpoint; original workspace retained')
+            # Snapshot restore cannot change CPU/RAM. Transfer the user's home
+            # instead; preserve the original stopped environment as recovery.
             await self.editor_profiles.capture(self.record(wid))
-            await self.backup_source(self.record(wid))
+            result=await self.execute(wid,['python','-I','-c',(ROOT/'sandbox/home_archive.py').read_text()],stdin=json.dumps({'path':remote}),bootstrap=True,timeout=300)
+            if result['exit_code']:
+                diagnostics=self.root/'diagnostics';diagnostics.mkdir(exist_ok=True,mode=0o700)
+                path=diagnostics/(wid+'-resize.json');path.write_text(json.dumps(result));path.chmod(0o600)
+                reason='Home transfer timed out' if result.get('timed_out') else 'Could not save the complete home for resizing'
+                if 'safe migration limit' in result.get('stderr',''):reason='The home exceeds the supported transfer size'
+                raise RuntimeError(reason+'; original workspace retained')
+            metadata=json.loads(result['stdout']);size_bytes=metadata['bytes']
+            if metadata.get('parts')!=(size_bytes+7_999_999)//8_000_000:raise RuntimeError('Invalid workspace transfer metadata')
+            if not 0<size_bytes<=2_000_000_000:raise RuntimeError('Workspace transfer is too large')
+            record=self.record(wid);group=self.profile('developer')['group']
+            with local.open('xb') as output:
+                local.chmod(0o600)
+                for index in range(metadata['parts']):
+                    part=remote+f'/part-{index:04d}'
+                    trusted='/var/lib/lab/home-download.part'
+                    script="import os,stat; from pathlib import Path; fd=os.open("+repr(part)+",os.O_RDONLY|os.O_NOFOLLOW); info=os.fstat(fd); assert stat.S_ISREG(info.st_mode) and info.st_uid==1000 and info.st_size<=8000000; data=os.read(fd,8000001); os.close(fd); p=Path("+repr(trusted)+"); p.unlink(missing_ok=True); p.write_bytes(data); p.chmod(0o600)"
+                    await self.root_exec(record,'python -I -c '+shlex.quote(script))
+                    data=await self.transport.read(group,record['sandbox_id'],trusted,8_000_000)
+                    if len(data)!=min(8_000_000,size_bytes-output.tell()):raise RuntimeError('Workspace transfer segment was incomplete')
+                    output.write(data)
+            if local.stat().st_size!=size_bytes:raise RuntimeError('Workspace transfer was incomplete')
+            await self.transport.call('remove_file',group,record['sandbox_id'],{'path':trusted})
+            # Only this operation's generated segments; never the source home.
+            script="import shutil; from pathlib import Path; p=Path("+repr(remote)+"); assert p.parent==Path('/tmp') and p.name.startswith('lab-home-') and not p.is_symlink(); shutil.rmtree(p)"
+            await self.root_exec(record,'python -I -c '+shlex.quote(script))
             await self.stop(wid)
             async with self.workspace_locks.setdefault(wid,asyncio.Lock()):
                 record=self.record(wid)
                 record.setdefault('previous_sandboxes',[]).append(record['sandbox_id'])
                 record.pop('snapshot_id',None)
-                record.update(source_restore=True,sandbox_id=None,compute_size=size,create_submitted=False,state='creating',prepared=False)
+                record.update(home_restore=str(local),sandbox_id=None,compute_size=size,create_submitted=False,state='creating',prepared=False)
                 self.save(record)
                 from .previews import previews
                 await previews.remove_workspace(wid)
@@ -501,7 +525,8 @@ class AzureRuntime:
 
     async def restore_source(self, record):
         payload=await self.storage.load('workspaces',record['id'])
-        files=(payload or {}).get('files',[])
+        if payload is None:raise RuntimeError('Saved source checkpoint is missing; restore was not completed')
+        files=payload.get('files',[])
         # `backup_source` already validates this exact bounded file format.
         from .workspace_links import checked_files
         files=checked_files({'files':files})
@@ -509,7 +534,7 @@ class AzureRuntime:
         result=await self.execute(record['id'],['python','-I','-c',(ROOT/'sandbox/sync_project.py').read_text()],stdin=json.dumps({'scope':'','changes':changes}),bootstrap=True,timeout=45,maximum=1_000_000)
         if result['exit_code'] or len(json.loads(result['stdout']).get('applied',[]))!=len(changes):
             raise RuntimeError('New workspace could not restore its source; original workspace retained')
-        current=self.record(record['id']);current.pop('source_restore',None);self.save(current)
+        record.pop('source_restore',None);self.save(record)
 
     async def maintain(self):
         while True:
@@ -526,10 +551,12 @@ class AzureRuntime:
                         if remote['state']=='Running':
                             # Inspect only timestamps, not session contents. Polling
                             # itself must not keep idle compute or previews alive.
-                            script="from pathlib import Path; import json\np=Path.home()/'.config/lab/activity.json'\nprint(p.stat().st_mtime if p.is_file() else 0)"
+                            script="from pathlib import Path; import json\np=Path.home()/'.config/lab/activity.json'\nc=Path('/sys/fs/cgroup')\ndef read(name):\n try:return (c/name).read_text()\n except OSError:return ''\ncpu=dict(line.split() for line in read('cpu.stat').splitlines())\nprint(json.dumps({'activity':p.stat().st_mtime if p.is_file() else 0,'memory_peak_bytes':int(read('memory.peak') or read('memory.current') or 0),'cpu_usage_usec':int(cpu.get('usage_usec',0))}))"
                             result=await self.execute(record['id'],['python','-I','-c',script],bootstrap=True,timeout=10)
-                            at=min(float(result['stdout'].strip()),time.time())
+                            sample=json.loads(result['stdout']);at=min(float(sample['activity']),time.time())
                             current=self.record(record['id']);current['activity_checked_at']=time.time()
+                            from .workspace_usage import observe
+                            if sample['memory_peak_bytes']>0:current['usage']=observe(current.get('usage'),sample,time.time())
                             if at>current.get('last_activity_at',0):
                                 current['last_activity_at']=at
                                 from .previews import previews

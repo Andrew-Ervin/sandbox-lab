@@ -1479,7 +1479,7 @@
 
   restoreState();
   vscode.postMessage({ type: 'ready' });
-    // LAB_DICTATION: opt-in recording, editable transcript, no automatic chat send.
+  // LAB_DICTATION: opt-in recording, editable transcript, no automatic chat send.
 const LAB_VOICE_SECONDS=300,LAB_VOICE_BYTES=10000000;
 // Encode the browser recording as the provider-tested mono PCM WAV format.
 function labEncodeWav(samples) {

@@ -13,3 +13,7 @@ On first activation, SQLite history and workspace metadata are backed up in priv
 Editor profiles are stored per owner in the local workspace database. Appearance/editor preferences and keybindings follow the user, including existing workspaces when they next launch. Per-workspace baselines prevent an older open workspace from overwriting newer preferences wholesale. Selected browser layout keys are copied without copying chat state, secrets, trust decisions or arbitrary extension state. The approved pinned extensions are available in each workstation; this feature does not bypass the managed gallery or package-age policy.
 
 This is application-level isolation on one trusted operator’s local broker. It is not isolation from the operator, not encrypted multi-tenant storage on the local machine, and not a production distributed identity deployment.
+
+Reopening an existing running workstation now captures portable preferences from the same user's other running workstations and applies the merged profile. Stopped workstations are not woken. Missing saved extensions install in the background through the existing approved gallery; denied or unavailable extensions create an operation failure event. Browser-local layout state and extension-specific credentials remain outside the portable profile.
+
+Older project-local theme/font overrides are backed up before being removed in favor of the account appearance profile. Project-specific editing rules are retained. Coding tools are instructed to write appearance preferences at user scope.

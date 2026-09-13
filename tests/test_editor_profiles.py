@@ -43,3 +43,23 @@ def test_settings_symlink_is_not_followed(tmp_path,monkeypatch):
 
 def test_editor_jsonc_preserves_strings_comments_and_trailing_commas():
     assert preferences.parse_jsonc('{// personal choice\n"editor.fontSize":18, /* note */ "label":"https://host/a,b",}')=={'editor.fontSize':18,'label':'https://host/a,b'}
+
+@pytest.mark.asyncio
+async def test_open_syncs_only_same_owner_running_workspaces():
+    a={'id':'a','owner':'alice','kind':'developer','state':'running'}
+    records=[a,{**a,'id':'b'},{**a,'id':'c','state':'stopped'},{**a,'id':'d','owner':'bob'}]
+    control=SimpleNamespace(db=sqlite3.connect(':memory:'),records=lambda:records,resizing=set())
+    profiles=EditorProfiles(control);profiles.capture=AsyncMock();profiles.restore=AsyncMock()
+    await profiles.for_open(a)
+    profiles.capture.assert_awaited_once_with(records[1]);profiles.restore.assert_awaited_once_with(a)
+
+def test_project_appearance_migrates_with_backup_without_moving_project_rules(tmp_path,monkeypatch):
+    user=tmp_path/'User';user.mkdir();workspace=tmp_path/'settings.json'
+    monkeypatch.setattr(preferences,'USER',user);monkeypatch.setattr(preferences,'WORKSPACE',workspace)
+    original={'workbench.colorTheme':'Dark','editor.tabSize':4}
+    workspace.write_text(json.dumps(original))
+    profile=preferences.export()
+    assert profile['settings']=={'workbench.colorTheme':'Dark'}
+    preferences.apply(profile)
+    assert json.loads(workspace.read_text())=={'editor.tabSize':4}
+    assert json.loads(workspace.with_suffix('.json.before-account-profile').read_text())==original

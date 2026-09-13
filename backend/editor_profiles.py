@@ -6,7 +6,7 @@ from .config import ROOT
 
 class EditorProfiles:
     def __init__(self, control):
-        self.control=control;self.locks={}
+        self.control=control;self.locks={};self.extension_tasks={}
         control.db.executescript('CREATE TABLE IF NOT EXISTS editor_profiles(owner TEXT PRIMARY KEY, body TEXT NOT NULL, updated REAL); CREATE TABLE IF NOT EXISTS editor_baselines(workspace TEXT PRIMARY KEY, body TEXT NOT NULL);')
 
     def get(self,owner):
@@ -15,7 +15,7 @@ class EditorProfiles:
 
     async def command(self,record,payload):
         result=await self.control.execute(record['id'],['python','-I','-c',(ROOT/'sandbox/editor_preferences.py').read_text()],
-            stdin=json.dumps(payload),bootstrap=True,timeout=15,maximum=600000)
+            stdin=json.dumps(payload),bootstrap=True,timeout=180 if payload['action']=='extensions' else 15,maximum=600000)
         if result['exit_code']:raise RuntimeError('Editor preferences could not synchronize')
         return json.loads(result['stdout'])
 
@@ -58,3 +58,20 @@ class EditorProfiles:
             profile=self.get(owner)['profile']
             if profile is not None:await self.command(record,{'action':'apply','profile':profile})
             self.baseline(record['id'],await self.command(record,{'action':'export'}))
+
+    async def for_open(self,record):
+        # Capture other already-running workspaces without waking stopped ones.
+        for other in self.control.records():
+            if (other['id']!=record['id'] and other.get('owner')==record.get('owner')
+                    and other['kind']=='developer' and other['state']=='running'
+                    and not other.get('warm') and other['id'] not in self.control.resizing):
+                await self.capture(other)
+        await self.restore(record)
+        profile=self.get(record.get('owner'))['profile']
+        old=self.extension_tasks.get(record['id'])
+        if profile and (old is None or old.done()):
+            async def install():
+                try:await self.command(record,{'action':'extensions','profile':profile})
+                except Exception:
+                    self.control.telemetry.event('developer',record['id'],'editor_extension_restore_failed',error='Saved extensions could not install through the approved gallery')
+            self.extension_tasks[record['id']]=asyncio.create_task(install())

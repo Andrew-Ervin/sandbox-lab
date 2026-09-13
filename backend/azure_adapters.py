@@ -108,10 +108,13 @@ class AzureDeveloper(AzureWorkspaces):
     def __init__(self): super().__init__('developer')
 
     def public(self, ws):
+        from .workspace_usage import suggestion
+        record=self.runtime.record(ws['id'])
         return {'id':ws['id'],'name':ws['name'],'status':ws['latest_build']['status'],'provider':'azure',
                 'harness_status':self.harness.get(ws['id'],'Ready'),
+                'suggested_compute':suggestion(record.get('usage',{}),record.get('compute_size','performance')),
                 'last_used_at':self.runtime.record(ws['id']).get('last_opened_at',self.runtime.record(ws['id'])['created_at']),
-                'compute_size':self.runtime.record(ws['id']).get('compute_size','balanced'),
+                'compute_size':self.runtime.record(ws['id']).get('compute_size','performance'),
                 'harness_error':self.setup_errors.get(ws['id']),
                 'url':f'/api/developer/workspaces/{ws["id"]}/open', 'ide_url':f'/api/developer/workspaces/{ws["id"]}/open'}
 
@@ -135,6 +138,7 @@ class AzureDeveloper(AzureWorkspaces):
         from .activity import background_activity
         if not background_activity.get():
             record=self.runtime.record(workspace['id']);record['last_opened_at']=time.time();self.runtime.save(record)
+            await self.runtime.editor_profiles.for_open(record)
         if self.configured_until.get(workspace['id'], 0) < time.time():
             self.configure(workspace['id'], workspace['name'])
             # The editor is already healthy. Harness setup has its own visible

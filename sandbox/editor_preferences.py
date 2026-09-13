@@ -5,6 +5,8 @@ import sqlite3
 from pathlib import Path
 
 USER=Path.home()/'.local/share/code-server/User'
+WORKSPACE=Path.home()/'project/.vscode/settings.json'
+APPEARANCE={'workbench.colorTheme','workbench.iconTheme','workbench.preferredDarkColorTheme','workbench.preferredLightColorTheme','editor.fontSize','editor.fontFamily','window.zoomLevel'}
 PREFIXES=('editor.','workbench.color','workbench.icon','workbench.preferred','workbench.editor.','workbench.sideBar.','workbench.panel.','workbench.activityBar.','workbench.startupEditor','window.zoomLevel','files.autoSave','explorer.','terminal.integrated.font')
 LAYOUT_KEYS={'workbench.activity.pinnedViewlets2','workbench.activity.placeholderViewlets','workbench.panel.pinnedPanels','workbench.panel.placeholderPanels','workbench.auxiliarybar.pinnedPanels','workbench.auxiliarybar.placeholderPanels','workbench.sidebar.location','workbench.sidebar.activeviewletid','workbench.auxiliarybar.activepanelid','workbench.panel.location','workbench.sidebar.width','workbench.panel.size','workbench.auxiliarybar.width'}
 
@@ -33,7 +35,9 @@ def export():
             state={k:v for k,v in connection.execute('SELECT key,value FROM ItemTable') if k in LAYOUT_KEYS and len(v)<=16000}
     bindings=read(USER/'keybindings.json',[])
     extensions=read(USER.parent/'extensions/extensions.json',[])
-    return {'settings':settings(read(USER/'settings.json',{})), 'keybindings':bindings if isinstance(bindings,list) and len(bindings)<=250 else [],
+    portable=settings(read(USER/'settings.json',{}))
+    portable.update({k:v for k,v in read(WORKSPACE,{}).items() if k in APPEARANCE})
+    return {'settings':portable, 'keybindings':bindings if isinstance(bindings,list) and len(bindings)<=250 else [],
         'extensions':sorted({e.get('identifier',{}).get('id','').lower() for e in extensions if re.fullmatch(r'[\w-]+\.[\w-]+',e.get('identifier',{}).get('id',''))}), 'layout':state}
 
 def apply(value):
@@ -45,6 +49,14 @@ def apply(value):
         if key.startswith(PREFIXES):original.pop(key)
     original.update(settings(value.get('settings',{})))
     temp=path.with_suffix('.tmp');temp.write_text(json.dumps(original,indent=2));temp.replace(path)
+    # Earlier agents wrote account appearance into project settings. Back up
+    # those overrides and let the shared user profile take effect on reopen.
+    overrides=read(WORKSPACE,{})
+    if any(k in APPEARANCE for k in overrides) and not WORKSPACE.is_symlink():
+        backup=WORKSPACE.with_suffix('.json.before-account-profile')
+        if not backup.exists():backup.write_bytes(WORKSPACE.read_bytes())
+        remaining={k:v for k,v in overrides.items() if k not in APPEARANCE}
+        temp=WORKSPACE.with_suffix('.tmp');temp.write_text(json.dumps(remaining,indent=2));temp.replace(WORKSPACE)
     bindings=value.get('keybindings',[])
     path=USER/'keybindings.json'
     if not path.is_symlink() and isinstance(bindings,list) and len(bindings)<=250:path.write_text(json.dumps(bindings,indent=2))
@@ -55,9 +67,25 @@ def apply(value):
             for key,v in value.get('layout',{}).items():
                 if key in LAYOUT_KEYS and isinstance(v,str) and len(v)<=16000:connection.execute('INSERT OR REPLACE INTO ItemTable VALUES (?,?)',(key,v))
 
+def install_extensions(value):
+    import os
+    import subprocess
+    installed=set(export()['extensions'])
+    requested=value.get('extensions',[])
+    if not isinstance(requested,list) or len(requested)>100:raise ValueError('Invalid extension profile')
+    for identity in requested:
+        if not isinstance(identity,str) or not re.fullmatch(r'[\w-]+\.[\w-]+',identity):raise ValueError('Invalid extension ID')
+        if identity in installed:continue
+        # The same reviewed gallery enforces the package/version policy. No
+        # external marketplace URL or VSIX path is accepted from preferences.
+        subprocess.run(['code-server','--install-extension',identity],check=True,
+            env={**os.environ,'EXTENSIONS_GALLERY':json.dumps({'serviceUrl':'http://127.0.0.1:3128/vscode/gallery'})},
+            stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=120)
+
 if __name__=='__main__':
     import sys
     request=json.load(sys.stdin)
     if request['action']=='export':print(json.dumps(export()))
     elif request['action']=='apply':apply(request['profile']);print('{}')
+    elif request['action']=='extensions':install_extensions(request['profile']);print('{}')
     else:raise ValueError('Unknown preference operation')

@@ -28,8 +28,12 @@ def packages():
 def model_reservation(runtime, body):
     prices = runtime.config.get('model_prices', {})
     from .config import MODEL
-    if prices.get('model') != MODEL or not prices.get('prompt') or not prices.get('completion'):
-        raise RuntimeError('Verify current model prices before enabling Azure coding calls.')
+    selected=body.get('model',MODEL)
+    from .workspace_models import price
+    try:prices=price(selected)
+    except RuntimeError:
+        if prices.get('model')!=selected or not prices.get('prompt') or not prices.get('completion'):
+            raise RuntimeError('Verify current prices for the selected model before calling it.')
     # UTF-8 bytes bound input tokens conservatively; include protocol overhead.
     field = 'max_output_tokens' if 'max_output_tokens' in body else 'max_tokens'
     maximum = min(32768, int(body.get(field, 32768)))
@@ -37,7 +41,7 @@ def model_reservation(runtime, body):
     body[field] = maximum
     # Cover approved server-side search as well as text inference.
     search = .10 if body.get('max_tool_calls') else 0
-    return (len(json.dumps(body).encode())+8192)*float(prices['prompt']) + maximum*float(prices['completion']) + .05 + search
+    return (len(json.dumps(body).encode())+8192)*float(prices['prompt']) + maximum*float(prices['completion']) + .05 + search + float(prices.get('request',0))
 
 
 async def serve(runtime, record, ready=None):
@@ -49,6 +53,8 @@ async def serve(runtime, record, ready=None):
         model_client = None
         if record['kind'] == 'developer':
             from sandbox import gateway
+            from .workspace_models import resolve
+            gateway.catalog_resolver=resolve
             await stack.enter_async_context(gateway.lifespan(gateway.app))
             model_client = await stack.enter_async_context(httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway.app), base_url='http://models', timeout=240))
         url = record['bridge_url'].replace('https://','wss://')+'/services'
@@ -107,7 +113,9 @@ async def serve(runtime, record, ready=None):
                         for offset in range(0,len(response.content),65536):
                             await send({'type':'body','data':base64.b64encode(response.content[offset:offset+65536]).decode()})
                         await send({'type':'end'})
-                    except Exception:
+                    except Exception as error:
+                        detail=str(error.detail) if hasattr(error,'detail') else str(error) if isinstance(error,(ValueError,RuntimeError)) else type(error).__name__
+                        runtime.telemetry.event(record['kind'],record['id'],'service_request_failed',error=detail[:250])
                         await send({'type':'headers','status':503,'content_type':'application/json'})
                         await send({'type':'body','data':base64.b64encode(b'{"error":{"message":"Broker service unavailable or request denied. Check runtime status and budget."}}').decode()})
                         await send({'type':'end'})

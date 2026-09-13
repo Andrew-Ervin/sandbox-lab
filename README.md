@@ -32,4 +32,6 @@ Validate changes with `.venv/bin/python -m pytest -q`, `npm run test:polling`, `
 
 Keep `.local`, `.env`, credentials, generated apps, conversation records and workspace files private. Run `python3 scripts/repo_audit.py --staged` on the exact index before any commit. Public publication requires explicit user authorization.
 
-User identity and editor preferences are described in [Identity and personal settings](docs/IDENTITY.md). Workspace display names are independent of runtime identifiers. New workspaces default to 1 CPU / 2 GiB; the sandbox tiers are 1 / 2 / 20 GiB, 2 / 4 / 40 GiB and 4 / 8 / 80 GiB CPU, memory and disk. Changing size creates a clean sandbox, restores eligible source from private Blob, and reapplies the user's portable editor profile.
+User identity and editor preferences are described in [Identity and personal settings](docs/IDENTITY.md). Workspace display names are independent of runtime identifiers. New workspaces default to 1 CPU / 2 GiB; the sandbox tiers are 1 / 2 / 20 GiB, 2 / 4 / 40 GiB and 4 / 8 / 80 GiB CPU, memory and disk. Changing size transfers the saved home to a new sandbox and reapplies the user's portable editor profile. The original stopped sandbox is retained for recovery.
+
+For Zac's ACA/AKS comparison and review-only network/identity templates, see [Network controls and workload identity](docs/NETWORK-IDENTITY.md).

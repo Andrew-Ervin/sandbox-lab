@@ -2,6 +2,13 @@
 import asyncio,json,os,socket,time,mimetypes,secrets
 from urllib.parse import urlsplit
 import uvicorn
+from contextlib import nullcontext
+
+class PreviewServer(uvicorn.Server):
+    # Embedded listeners must not replace the main broker signal handlers.
+    def capture_signals(self):
+        return nullcontext()
+
 from . import preview
 from .config import ROOT,STATE
 
@@ -36,7 +43,7 @@ class Previews:
         target={**target}
         if target.get('kind')=='app':target['capability']=secrets.token_urlsafe(24)
         preview.targets[port]={**target,'expires':time.time()+(600 if target.get('kind')=='ide' else self.idle_seconds)}
-        server=uvicorn.Server(uvicorn.Config(preview.app,host='127.0.0.1',port=port,log_level='error',access_log=False,timeout_graceful_shutdown=2))
+        server=PreviewServer(uvicorn.Config(preview.app,host='127.0.0.1',port=port,log_level='error',access_log=False,timeout_graceful_shutdown=2))
         self.resources[port]={'server':server,'task':asyncio.create_task(server.serve(sockets=[sock])),'process':process,'log':log}
         suffix=f'/_lab/{target["capability"]}/' if target.get('kind')=='app' else '/'
         return f'http://127.0.0.1:{port}{suffix}'

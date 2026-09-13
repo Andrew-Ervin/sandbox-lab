@@ -24,14 +24,17 @@ extension=extension.replace("console.log('[pi-chat] activating...');","console.l
 extension=extension.replace("const pick = await vscode.window.showQuickPick(","vscode.window.showInformationMessage('Model access is managed by Sandbox Lab. Use Refresh Ori / Pi there, then reload this window.'); return; const pick = await vscode.window.showQuickPick(");
 extension="import {touch} from './labActivity';\n"+extension;
 extension=extension.replace("console.log('[pi-chat] activating...');", "console.log('[pi-chat] activating...'); touch(); context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(touch),vscode.window.onDidChangeTextEditorSelection(touch),vscode.window.onDidChangeActiveTextEditor(touch),vscode.window.onDidStartTerminalShellExecution(touch));");
+extension=extension.replace('return Object.keys(auth);',"return ['lab'];");
 fs.writeFileSync(path.join(scratch,'src/extension.ts'),extension);
 let sidebar=fs.readFileSync(path.join(scratch,'src/chatSidebarProvider.ts'),'utf8').replace('data: https:;','data:;');
 sidebar="import {touch,setBusy} from './labActivity';\n"+sidebar;
 sidebar=sidebar.replace("case 'agent_start':","case 'agent_start': setBusy(true);").replace("case 'agent_end':","case 'agent_end': setBusy(false);").replace("case 'prompt':","case 'prompt': touch();");
+sidebar=sidebar.replace('return Object.keys(auth);',"return ['lab'];");
 fs.writeFileSync(path.join(scratch,'src/chatSidebarProvider.ts'),sidebar);
 let rpc=fs.readFileSync(path.join(scratch,'src/piRpcClient.ts'),'utf8');
 rpc=rpc.replace("console.warn('[pi stderr]', text);",'// Model/provider notices remain in the workspace, not the browser console.');
 rpc="import {setBusy} from './labActivity';\n"+rpc;
+rpc=rpc.replace('return resp.data.models;',"return resp.data.models.filter((model: any) => model.provider === 'lab');");
 rpc=rpc.replaceAll('this._isRunning = false;', 'this._isRunning = false; setBusy(false);');
 fs.writeFileSync(path.join(scratch,'src/piRpcClient.ts'),rpc);
 await build({entryPoints:[path.join(scratch,'src/extension.ts')],outfile:path.join(out,'out/extension.js'),platform:'node',format:'cjs',bundle:true,external:['vscode'],minify:true});

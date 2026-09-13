@@ -4,7 +4,9 @@ export class ChatTransport {
   pending = new Map<string, symbol>();
   subscriptions = new Map<symbol, () => Promise<void>>();
   async detach() {
-    await Promise.allSettled([...this.subscriptions.values()].map(cancel => cancel()));
+    // Cancellation closes the browser subscription, not the persisted job.
+    // A slow upstream cancellation must never hold navigation hostage.
+    for (const cancel of [...this.subscriptions.values()]) void cancel().catch(() => {});
   }
   busy(thread: string | null) {
     return this.pending.has(thread || 'new');
@@ -37,8 +39,14 @@ export class ChatTransport {
       this.subscriptions.delete(token);
       if (this.pending.get(key) === token) this.pending.delete(key);
     };
+    let detached = false;
+    this.subscriptions.set(token, async () => { detached = true; release(); });
     try {
       const response = await fetcher(input, init);
+      if (detached) {
+        void response.body?.cancel('Navigated to another conversation').catch(() => {});
+        throw new DOMException('Conversation subscription detached', 'AbortError');
+      }
       if (!response.ok || !response.body) {
         release();
         return response;

@@ -7,6 +7,8 @@ from .config import ROOT, STATE
 
 async def configure(adapter, workspace):
     from .capabilities import issue
+    from .workspace_models import refresh
+    await refresh()
     record = adapter.runtime.record(workspace['id']); sid = record['sandbox_id']
     group = adapter.runtime.profile('developer')['group']
     ori = STATE/'bin/ori-linux-amd64'

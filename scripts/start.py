@@ -7,7 +7,7 @@ os.chdir(ROOT)
 LOCAL=ROOT/'.local'; LOCAL.mkdir(exist_ok=True)
 PYTHON=str(ROOT/'.venv/bin/python')
 sys.path.insert(0,str(ROOT))
-commands={'backend':[PYTHON,'-m','uvicorn','backend.main:app','--host','127.0.0.1','--port','8787','--no-access-log'],'frontend':['npm','run','dev','--','--host','127.0.0.1','--port','3000']}
+commands={'backend':[PYTHON,'-m','uvicorn','backend.main:app','--host','127.0.0.1','--port','8787','--no-access-log','--timeout-graceful-shutdown','10'],'frontend':['npm','run','dev','--','--host','127.0.0.1','--port','3000']}
 children={}; logs={}; stop=False
 
 def end(*_):

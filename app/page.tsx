@@ -722,7 +722,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
   });
   usePolling(
     async () => {
-      if (streaming.current || transport.current.busy(thread)) return;
+      if (!chatReady || threadLoading || streaming.current || transport.current.busy(thread)) return;
       const job = status?.jobs.find((j) => j.thread_id === thread);
       if (!job) return;
       const key = job.id + ':' + job.status;
@@ -1159,10 +1159,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                 <ChatKit
                   control={chat.control}
                   className="chat-surface"
-                  style={{
-                    visibility:
-                      !chatReady || threadLoading ? 'hidden' : 'visible',
-                  }}
+                  style={{ opacity: threadLoading ? 0 : 1 }}
                 />
               </div>
               <CodingSessionStrip

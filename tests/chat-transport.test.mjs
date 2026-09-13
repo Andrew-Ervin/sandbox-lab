@@ -30,3 +30,18 @@ test('navigation detaches a rebound stream and releases the UI without waiting f
  assert.equal(canceled,true);assert.equal(transport.busy('A'),false);
  assert.equal((await reader.read()).done,true);
 });
+test('a stuck upstream cancellation does not block navigating away',async()=>{
+ const transport=new ChatTransport();
+ await transport.send(async()=>new Response(new ReadableStream({cancel(){return new Promise(()=>{});}})),'/',request('A'));
+ await transport.detach();
+ assert.equal(transport.busy('A'),false);
+});
+test('navigation also detaches before response headers arrive',async()=>{
+ const transport=new ChatTransport();let finish;
+ const pending=transport.send(()=>new Promise(resolve=>{finish=resolve;}),'/',request('A'));
+ assert.equal(transport.busy('A'),true);
+ await transport.detach();
+ assert.equal(transport.busy('A'),false);
+ finish(new Response('late stream'));
+ await assert.rejects(pending,{name:'AbortError'});
+});

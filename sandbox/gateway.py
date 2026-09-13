@@ -28,12 +28,26 @@ model = os.environ['OPENROUTER_MODEL']
 allow_search = os.getenv('LAB_ALLOW_WEB_SEARCH', 'true').lower() == 'true'
 
 
+_upstream_lock = asyncio.Lock()
+_upstream_users = 0
+
 @asynccontextmanager
 async def lifespan(app):
-    async with httpx.AsyncClient(timeout=180, proxy=os.getenv("UPSTREAM_PROXY") or None, trust_env=False, follow_redirects=False,
-                                limits=httpx.Limits(max_connections=64, max_keepalive_connections=16)) as upstream:
-        app.state.upstream = upstream
+    # Multiple sandbox service connections share this app. A warm spare ending
+    # must not close the provider connection used by another active workspace.
+    global _upstream_users
+    async with _upstream_lock:
+        if _upstream_users == 0:
+            app.state.upstream = httpx.AsyncClient(timeout=180, proxy=os.getenv("UPSTREAM_PROXY") or None, trust_env=False, follow_redirects=False,
+                limits=httpx.Limits(max_connections=64, max_keepalive_connections=16))
+        _upstream_users += 1
+    try:
         yield
+    finally:
+        async with _upstream_lock:
+            _upstream_users -= 1
+            if _upstream_users == 0:
+                await app.state.upstream.aclose()
 
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
@@ -46,6 +60,9 @@ async def gateway_error(request, error):
         'message': str(error.detail), 'type': 'gateway_error', 'code': 'lab_' + str(error.status_code)}},
         headers={'Cache-Control': 'no-store'})
 
+
+# Set only by the trusted broker, never by a workspace request.
+catalog_resolver = None
 
 def authorize(request):
     try:
@@ -62,8 +79,11 @@ def authorize(request):
         now = time.time()
         if not isinstance(data, dict) or data.get('aud') != AUDIENCE or not isinstance(data.get('model'),str):
             raise ValueError()
+        if 'catalog' in data:
+            if not isinstance(data['catalog'],str) or catalog_resolver is None:raise ValueError()
+            data['models']=catalog_resolver(data['catalog'])
         models=data.get('models',[data['model']])
-        if not isinstance(models,list) or not 1 <= len(models) <= 64 or data['model'] not in models or any(not isinstance(item,str) or not 1 <= len(item) <= 160 for item in models):
+        if not isinstance(models,list) or not 1 <= len(models) <= (2048 if 'catalog' in data else 64) or data['model'] not in models or any(not isinstance(item,str) or not 1 <= len(item) <= 160 for item in models):
             raise ValueError()
         if 'models' not in data and data['model'] != model:
             raise ValueError()
