@@ -2,6 +2,8 @@
 import json
 import re
 import sqlite3
+import os
+import tempfile
 from pathlib import Path
 
 USER=Path.home()/'.local/share/code-server/User'
@@ -40,6 +42,15 @@ def export():
     return {'settings':portable, 'keybindings':bindings if isinstance(bindings,list) and len(bindings)<=250 else [],
         'extensions':sorted({e.get('identifier',{}).get('id','').lower() for e in extensions if re.fullmatch(r'[\w-]+\.[\w-]+',e.get('identifier',{}).get('id',''))}), 'layout':state}
 
+def atomic_write(path, data):
+    fd, name = tempfile.mkstemp(prefix='.'+path.name+'-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as output:
+            output.write(data)
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
 def apply(value):
     USER.mkdir(parents=True,exist_ok=True)
     path=USER/'settings.json'
@@ -48,18 +59,23 @@ def apply(value):
     for key in list(original):
         if key.startswith(PREFIXES):original.pop(key)
     original.update(settings(value.get('settings',{})))
-    temp=path.with_suffix('.tmp');temp.write_text(json.dumps(original,indent=2));temp.replace(path)
+    atomic_write(path,json.dumps(original,indent=2).encode())
     # Earlier agents wrote account appearance into project settings. Back up
     # those overrides and let the shared user profile take effect on reopen.
     overrides=read(WORKSPACE,{})
     if any(k in APPEARANCE for k in overrides) and not WORKSPACE.is_symlink():
         backup=WORKSPACE.with_suffix('.json.before-account-profile')
-        if not backup.exists():backup.write_bytes(WORKSPACE.read_bytes())
+        try:
+            fd=os.open(backup,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+        except FileExistsError:
+            if backup.is_symlink():raise ValueError('Unsafe preference backup')
+        else:
+            with os.fdopen(fd,'wb') as output:output.write(WORKSPACE.read_bytes())
         remaining={k:v for k,v in overrides.items() if k not in APPEARANCE}
-        temp=WORKSPACE.with_suffix('.tmp');temp.write_text(json.dumps(remaining,indent=2));temp.replace(WORKSPACE)
+        atomic_write(WORKSPACE,json.dumps(remaining,indent=2).encode())
     bindings=value.get('keybindings',[])
     path=USER/'keybindings.json'
-    if not path.is_symlink() and isinstance(bindings,list) and len(bindings)<=250:path.write_text(json.dumps(bindings,indent=2))
+    if not path.is_symlink() and isinstance(bindings,list) and len(bindings)<=250:atomic_write(path,json.dumps(bindings,indent=2).encode())
     # On builds that store layout server-side, apply only the reviewed UI keys.
     db=USER/'globalStorage/state.vscdb'
     if db.is_file() and not db.is_symlink():

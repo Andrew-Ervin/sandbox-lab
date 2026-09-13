@@ -91,3 +91,15 @@ async def test_open_uses_only_most_recent_peer_and_bounds_wait(monkeypatch):
     await profiles.for_open(a)
     profiles.capture.assert_awaited_once_with(records[2])
     profiles.restore.assert_awaited_once_with(a)
+
+@pytest.mark.parametrize('target',['settings.tmp','settings.json.before-account-profile'])
+def test_profile_migration_never_follows_backup_or_temp_symlink(tmp_path,monkeypatch,target):
+    user=tmp_path/'User';user.mkdir();project=tmp_path/'project';project.mkdir()
+    workspace=project/'settings.json';workspace.write_text('{"workbench.colorTheme":"Dark"}')
+    victim=tmp_path/'victim';victim.write_text('preserve')
+    (project/target).symlink_to(victim)
+    monkeypatch.setattr(preferences,'USER',user);monkeypatch.setattr(preferences,'WORKSPACE',workspace)
+    if 'before-account' in target:
+        with pytest.raises(ValueError,match='Unsafe'):preferences.apply({'settings':{}})
+    else:preferences.apply({'settings':{}})
+    assert victim.read_text()=='preserve'

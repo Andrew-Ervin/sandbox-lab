@@ -287,3 +287,15 @@ async def test_queued_warm_role_does_not_block_other_roles(control):
     assert set(began)=={'quick','headless','developer'}
     task.cancel();await asyncio.gather(task,return_exceptions=True)
     assert all(t.done() for t in control.warm.tasks.values())
+
+@pytest.mark.asyncio
+async def test_app_only_resume_defers_editor_until_editor_open(control):
+    ws=await control.create('quick','test',disposable=True)
+    record=control.record(ws['id']);record.update(kind='developer',editor_prepared=False);control.save(record)
+    control.install_ide=AsyncMock()
+    await control.start(ws['id'],editor=False)
+    control.install_ide.assert_not_awaited()
+    await control.start(ws['id'],editor=True)
+    control.install_ide.assert_awaited_once()
+    await control.start(ws['id'],editor=True)
+    assert control.install_ide.await_count==1

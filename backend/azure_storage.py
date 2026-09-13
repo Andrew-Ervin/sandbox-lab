@@ -73,6 +73,15 @@ class AzureStorage:
             self.index[key] = {'etag':result['etag'],'sha256':digest,'bytes':len(raw),'saved_at':time.time()}
             self.flush()
 
+    async def delete(self,kind,identity):
+        if not self.enabled:raise RuntimeError('Cloud storage is unavailable for deletion')
+        key=self.key(kind,identity)
+        async with self.locks.setdefault(key,asyncio.Lock()):
+            try:await self.runtime.transport.call('blob_delete','lab-quick',args={'key':key})
+            except AzureError as error:
+                if error.status_code!=404:raise
+            self.index.pop(key,None);self.flush()
+
     def status(self):
         return {'enabled':self.enabled, 'provider':'Azure Blob', 'tier':'Standard Hot LRS',
                 'checkpoints':len(self.index), 'current_bytes':sum(x.get('bytes',0) for x in self.index.values()),

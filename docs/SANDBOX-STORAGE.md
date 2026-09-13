@@ -29,3 +29,5 @@ A fresh synthetic headless environment reached execution readiness in 4.24 secon
 References: [Azure snapshot lifecycle](https://learn.microsoft.com/en-us/azure/container-apps/sandboxes-snapshots-state-management), [sandbox volumes and tiers](https://learn.microsoft.com/en-us/azure/container-apps/sandboxes-overview), [Blob pricing](https://azure.microsoft.com/en-us/pricing/details/storage/blobs/).
 
 Saved app listings read local metadata immediately while cloud inventory and health refresh in the background. Pending observations are marked stale and do not assert readiness; opening still checks the runtime.
+
+Archive reopen retries reuse the verified local transfer. Explicit workspace deletion removes archive chunks before their manifest and then local transfer files; a failed cleanup remains retryable. Azure Blob soft-delete/version retention can retain recoverable bytes for the configured retention period. App-only resumes defer code-server and editor profile initialization until an editor is requested.

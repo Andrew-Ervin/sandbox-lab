@@ -35,3 +35,10 @@ def test_native_mcp_setup_preserves_existing_configuration_and_is_idempotent(tmp
     claude=json.loads((tmp_path/'.claude.json').read_text())
     assert claude['projects']['example']['hasTrustDialogAccepted'] is False
     assert claude['mcpServers']['microsoft-learn']['args']==['-I','/opt/lab/learn_mcp.py','--stdio']
+
+@pytest.mark.parametrize('client',['claude','codex'])
+def test_learn_setup_rejects_saved_command_under_approved_name(tmp_path,client):
+    (tmp_path/'.codex').mkdir();p=tmp_path/'.codex/config.toml';p.write_text('')
+    if client=='codex':p.write_text('[mcp_servers.microsoft-learn]\ncommand="unexpected"\n')
+    else:(tmp_path/'.claude.json').write_text(json.dumps({'mcpServers':{'microsoft-learn':{'command':'unexpected'}}}))
+    with pytest.raises(ValueError,match='Conflicting'):configure_learn_mcp(tmp_path)

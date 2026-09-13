@@ -121,7 +121,7 @@ class AzureRuntime:
             if owner and not warm:record['owner']=owner;self.save(record)
         return await self.start(record['id'],standby=warm)
 
-    async def start(self, wid, *, standby=False):
+    async def start(self, wid, *, standby=False, editor=True):
         if wid in self.resizing:raise RuntimeError('Workspace size is changing. Please wait.')
         kind=self.record(wid)['kind']
         if not standby:self.warm.demand(kind,self.record(wid).get('compute_size'))
@@ -132,7 +132,7 @@ class AzureRuntime:
                 while True:
                     if generation!=self.admission_generation:raise RuntimeError('Compute admission was cancelled by Stop all')
                     try:
-                        result=await self._start(self.record(wid))
+                        result=await self._start(self.record(wid), editor=editor)
                         self.telemetry.event(kind,wid,'admitted',seconds=time.monotonic()-begin)
                         return result
                     except CapacityBusy:
@@ -140,7 +140,7 @@ class AzureRuntime:
                         await asyncio.sleep(1)
         finally:self.queued[kind]-=1
 
-    async def _start(self, record):
+    async def _start(self, record, *, editor=True):
         started = time.monotonic(); stages = {}
         if record.get('cold_archive') and record.get('sandbox_id'):
             try:await self.transport.call('get',self.profile(record['kind'])['group'],record['sandbox_id'])
@@ -157,7 +157,10 @@ class AzureRuntime:
         if record.get('sandbox_id'):
             current = await self.transport.call('get', group, record['sandbox_id'])
             if current['state'] == 'Running' and record.get('prepared') and record.get('lease_until',0) > time.time()+30:
-                await self.ensure_services(record); return self.workspace(record, current)
+                await self.ensure_services(record)
+                if editor and record["kind"]=="developer" and not record.get("editor_prepared"):
+                    await self.install_ide(record);record["editor_prepared"]=True;self.save(record)
+                return self.workspace(record, current)
         else:
             # A timed-out create is recovered by an immutable broker-generated label.
             found = [s for s in await self.transport.call('list', group) if s.get('labels',{}).get('lab-workspace') == record['id'] and s['id'] not in record.get('previous_sandboxes',[])]
@@ -200,7 +203,7 @@ class AzureRuntime:
             if record.get('archive_frozen'):
                 await self.archive.freeze(record,False);record['archive_frozen']=False;self.save(record)
             stages['azure_allocate_or_resume_seconds'] = round(time.monotonic()-started,3)
-            await self.bootstrap(record)
+            await self.bootstrap(record, editor=editor)
             stages['bootstrap_seconds'] = round(time.monotonic()-started-stages['azure_allocate_or_resume_seconds'],3)
             if record.get('source_restore'):
                 await self.restore_source(record)
@@ -257,7 +260,7 @@ class AzureRuntime:
         if result['exit_code']: raise RuntimeError('Azure runtime preparation failed: '+result.get('stderr','')[-1500:])
         return result['stdout']
 
-    async def bootstrap(self, record):
+    async def bootstrap(self, record, *, editor=True):
         group = self.profile(record['kind'])['group']; sid = record['sandbox_id']
         # All root commands below are broker source, never model/workspace text.
         init = (ROOT/'sandbox/azure_bootstrap.py').read_text()
@@ -324,7 +327,10 @@ class AzureRuntime:
             await self.root_exec(record,'python -I -c '+shlex.quote(script))
             result = await self.execute(record['id'], ['sh','/opt/lab/project-init.sh'], timeout=30, bootstrap=True)
             if result['exit_code']: raise RuntimeError('Preinstalled language environment initialization failed')
-        if record['kind'] == 'developer': await self.install_ide(record)
+        record['editor_prepared']=False
+        if record['kind'] == 'developer' and editor:
+            await self.install_ide(record);record['editor_prepared']=True
+        self.save(record)
 
     async def verify_bridge(self, record):
         import httpx
@@ -463,6 +469,9 @@ class AzureRuntime:
         if record['state'] == 'deleted' or (record['state']=='stopped' and not delete): return
         if not record.get('sandbox_id'):
             if record.get('create_submitted'): raise RuntimeError('Reconcile the pending Azure create before cleanup')
+            if delete:await self.archive.delete(record)
+            if record.get('charge'):
+                self.budget.finish(record.pop('charge'),self.rate(record)*max(0,time.time()-record['lease_started'])/3600)
             record['state'] = 'deleted'; self.save(record); return
         if not skip_checkpoint and record['kind'] != 'quick' and not record.get('disposable') and record['state'] == 'running':
             try:
@@ -476,6 +485,9 @@ class AzureRuntime:
         if task: task.cancel(); await asyncio.gather(task, return_exceptions=True)
         record['state'] = 'deleting' if delete else 'stopping'; self.save(record)
         await self.transport.call('delete' if delete else 'stop', self.profile(record['kind'])['group'], record['sandbox_id'])
+        if delete:
+            record.update(sandbox_id=None,create_submitted=False);self.save(record)
+            await self.archive.delete(record)
         if record.get('charge'):
             self.budget.finish(record.pop('charge'), self.rate(record)*max(0,time.time()-record['lease_started'])/3600)
         record.update(state='deleted' if delete else 'stopped', updated_at=time.time(), prepared=False)

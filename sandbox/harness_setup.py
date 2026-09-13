@@ -252,10 +252,15 @@ def configure_learn_mcp(home):
     import tomllib
     command={'type':'stdio','command':'python','args':['-I','/opt/lab/learn_mcp.py','--stdio']}
     p=home/'.claude.json';d=json.loads(p.read_text()) if p.exists() else {}
-    d.setdefault('mcpServers',{}).setdefault('microsoft-learn',command)
+    existing=d.setdefault('mcpServers',{}).get('microsoft-learn')
+    if existing is not None and existing!=command:raise ValueError('Conflicting Microsoft Learn MCP configuration')
+    d['mcpServers']['microsoft-learn']=command
     p.write_text(json.dumps(d,indent=2));p.chmod(0o600)
     p=home/'.codex/config.toml';source=p.read_text()
-    if 'microsoft-learn' not in tomllib.loads(source).get('mcp_servers',{}):
+    existing=tomllib.loads(source).get('mcp_servers',{}).get('microsoft-learn')
+    expected={'command':'python','args':command['args'],'startup_timeout_sec':15,'tool_timeout_sec':45}
+    if existing is not None and existing!=expected:raise ValueError('Conflicting Microsoft Learn MCP configuration')
+    if existing is None:
         p.write_text(source+'\n[mcp_servers.microsoft-learn]\ncommand = "python"\nargs = ["-I", "/opt/lab/learn_mcp.py", "--stdio"]\nstartup_timeout_sec = 15\ntool_timeout_sec = 45\n')
     p=home/'.local/bin/lab-learn';p.parent.mkdir(parents=True,exist_ok=True)
     p.write_text('#!/bin/sh\nexec python -I /opt/lab/learn_mcp.py "$@"\n');p.chmod(0o755)

@@ -35,6 +35,9 @@ def blob_invoke(config, action, args):
         raw = blob.download_blob(etag=info.etag, match_condition=MatchConditions.IfNotModified).readall()
         if len(raw) > 70_000_000: raise ValueError('Checkpoint exceeds limit')
         return {'data':base64.b64encode(raw).decode(), 'etag':info.etag}
+    if action == 'blob_delete':
+        blob.delete_blob(delete_snapshots='include')
+        return {'deleted':True}
     if action == 'blob_put':
         raw = base64.b64decode(args['data'], validate=True)
         if len(raw) > 70_000_000: raise ValueError('Checkpoint exceeds limit')

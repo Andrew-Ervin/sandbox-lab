@@ -64,12 +64,37 @@ class AzureArchive:
         if total!=size or digest.hexdigest()!=manifest['sha256']:raise RuntimeError('Home archive verification failed')
 
     async def restore(self,record):
+        pending=record.get('home_restore')
+        if pending and Path(pending).is_file() and not Path(pending).is_symlink():return
         root=self.runtime.root/'home-transfers';root.mkdir(exist_ok=True,mode=0o700)
         local=root/(record['id']+'-'+uuid.uuid4().hex+'.tgz')
         try:await self.download(record['id'],record['cold_archive'],local)
         except BaseException:
             local.unlink(missing_ok=True);raise
         record['home_restore']=str(local);self.runtime.save(record)
+
+    async def delete(self,record):
+        # Delete chunks before the manifest so a partial failure is retryable.
+        for field in ('cold_archive','previous_cold_archive'):
+            key=record.get(field)
+            if not key:continue
+            manifest=await self.runtime.storage.load('workspaces',key)
+            if manifest:
+                if manifest.get('workspace')!=record['id']:raise RuntimeError('Invalid archive owner')
+                prefix=key.rsplit(':',1)[0]+':'
+                for chunk in manifest.get('chunks',[]):
+                    if not chunk['key'].startswith(prefix):raise RuntimeError('Invalid archive segment')
+                    await self.runtime.storage.delete('workspaces',chunk['key'])
+                await self.runtime.storage.delete('workspaces',key)
+            record.pop(field,None);self.runtime.save(record)
+        root=(self.runtime.root/'home-transfers').resolve()
+        for field in ('archive_backup','home_restore','home_transfer_backup'):
+            value=record.get(field)
+            if not value:continue
+            path=Path(value)
+            if path.parent.resolve()!=root or not path.name.startswith(record['id']+'-'):
+                raise RuntimeError('Unsafe local archive path')
+            path.unlink(missing_ok=True);record.pop(field,None);self.runtime.save(record)
 
     async def freeze(self,record,stop):
         # Freeze only existing sandbox-user processes. The broker relay and the

@@ -141,7 +141,7 @@ class AzureDeveloper(AzureWorkspaces):
         return self.public(ws)
 
     async def prepare(self, workspace, *, editor=True):
-        await self.runtime.start(workspace['id'])
+        await self.runtime.start(workspace['id'],editor=editor)
         self.touched[workspace['id']] = time.time()
         self.runtime.touch(workspace['id'])
         from .activity import background_activity
