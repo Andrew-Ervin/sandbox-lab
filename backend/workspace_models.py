@@ -11,6 +11,7 @@ _path=STATE/'workspace-model-catalog.json'
 _lock=asyncio.Lock()
 _catalog={}
 _updated=0.0
+_versions={}
 
 def accept(data):
     result={}
@@ -46,11 +47,17 @@ def snapshot():
     if not _catalog or time.time()-_updated>86400:return None
     ids=sorted(_catalog)
     version=hashlib.sha256(json.dumps(ids).encode()).hexdigest()
+    now=time.time()
+    for old in list(_versions):
+        if _versions[old][0]<=now:del _versions[old]
+    _versions[version]=(now+3600,ids)
     return version,ids
 
 def resolve(version):
-    value=snapshot()
-    return value[1] if value and value[0]==version else None
+    value=_versions.get(version)
+    if value and value[0]>time.time():return value[1]
+    current=snapshot()
+    return current[1] if current and current[0]==version else None
 
 def metadata():return list(_catalog.values())
 def price(model):

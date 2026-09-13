@@ -40,3 +40,15 @@ def test_catalog_capability_stays_small_and_resolves_only_trusted_catalog(monkey
     assert len(claims['models'])==501
     monkeypatch.setattr(gateway,'catalog_resolver',lambda _:None)
     with pytest.raises(Exception):gateway.authorize(request)
+
+
+def test_issued_catalog_snapshot_survives_refresh_and_expires(monkeypatch):
+    monkeypatch.setattr(catalog,'_versions',{})
+    monkeypatch.setattr(catalog.time,'time',lambda:1000)
+    monkeypatch.setattr(catalog,'_updated',1000)
+    monkeypatch.setattr(catalog,'_catalog',catalog.accept([entry(),entry('old/model')]))
+    version,ids=catalog.snapshot()
+    monkeypatch.setattr(catalog,'_catalog',catalog.accept([entry()]))
+    assert catalog.resolve(version)==ids
+    monkeypatch.setattr(catalog.time,'time',lambda:4601)
+    assert catalog.resolve(version) is None

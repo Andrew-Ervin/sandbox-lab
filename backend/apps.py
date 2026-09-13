@@ -47,14 +47,14 @@ class AppLifecycle:
             finally:headless.provisioning.discard(ws['id']);headless.touched[ws['id']]=time.time()
     async def human(self,workspace_id,developer,previews,ide=False,source_path=None):
         async with self.locks.setdefault(workspace_id,asyncio.Lock()):
-            ws=next((w for w in await developer.list() if w['id']==workspace_id),None)
+            ws=developer.lookup(workspace_id)
             if not ws:raise ValueError('Workspace not found')
             if not ide and hasattr(previews,'ready_app'):
                 ready=await previews.ready_app(workspace_id,source_path)
                 if ready:return ready
             # Resume by immutable identity; display names can contain spaces or
             # change after the first exit and must never select a new sandbox.
-            await developer.prepare(ws)
+            await developer.prepare(ws,editor=ide)
             developer.touched[workspace_id]=time.time()
             if ide:return await developer.ide(ws)
             await self.launch(ws,developer.token,'http://127.0.0.1:7080',source_path)

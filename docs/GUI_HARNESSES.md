@@ -1,5 +1,15 @@
 # Developer coding tools
 
+When the operator enables `workspace_mcp_learn`, workspace setup registers a
+fixed Microsoft Learn MCP client for Claude and Codex and installs `lab-learn
+search "question"` for Pi's terminal tool. It forwards only the three approved
+documentation tools to Microsoft's public endpoint. No credentials, dynamic
+package installation or general HTTP proxy are added. Normal tool approval
+settings remain intact. Existing workspaces receive it on harness refresh/open;
+native sessions already running may need to restart to discover it. Turning the
+runtime flag off revokes network access on the next harness refresh, even if a
+saved client entry remains. See the [examples](../infra/azure-sandbox-pilot/examples/README.md).
+
 Developer workstations use browser-based VS Code with pinned Pi Chat, Claude Code and Codex extensions. `piChat.piPath` points at `ori-lab`. Its RPC session, tool execution, developer history and files stay in the GUI home. Main-app headless coding uses its separate project home and local broker inference.
 
 The setup supplies `pi-lab`, `ori-lab`, `claude-lab`, `codex-lab`, and `ori-code-lab` terminal entry points. Bare `pi`, `codex`, and `claude` commands also enter the corresponding Ori wrapper. Ori launches the pinned real harness through private adapters, avoiding recursive wrapper discovery. Model requests route only through the local reverse gateway to the configured OpenRouter model. Upstream keys are not written into the workspace. The signed GUI token expires and is renewed only for active workstations. Approval and package-age controls remain enabled.

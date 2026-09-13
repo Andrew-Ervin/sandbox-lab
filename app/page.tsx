@@ -1,6 +1,4 @@
 'use client';
-import {AzureRuntimePanel} from '@/components/azure-runtime-panel';
-import { OperationsPanel } from '@/components/operations-panel';
 import {
   useCallback,
   useEffect,
@@ -48,6 +46,12 @@ import {
 } from '@/components/ui/sheet';
 import { LibraryActions, ArchiveNotice } from '@/components/library-actions';
 import { ProjectSidebar, ChatRow } from '@/components/project-sidebar';
+const OperationsPanel = lazy(() =>
+  import('@/components/operations-panel').then((m) => ({ default: m.OperationsPanel })),
+);
+const AzureRuntimePanel = lazy(() =>
+  import('@/components/azure-runtime-panel').then((m) => ({ default: m.AzureRuntimePanel })),
+);
 const ProjectsView = lazy(() =>
   import('@/components/projects-view').then((m) => ({
     default: m.ProjectsView,
@@ -1120,8 +1124,8 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                 />
               </Suspense>
             )}
-            {view === 'azure-runtime' && <AzureRuntimePanel sessionFetch={sessionFetch}/>}
-            {view === 'operations' && <OperationsPanel provider={status?.provider} sessionFetch={sessionFetch}/>}
+            {view === 'azure-runtime' && <Suspense fallback={<PanelLoading />}><AzureRuntimePanel sessionFetch={sessionFetch}/></Suspense>}
+            {view === 'operations' && <Suspense fallback={<PanelLoading />}><OperationsPanel provider={status?.provider} sessionFetch={sessionFetch}/></Suspense>}
             {view === 'policy' && (
               <Suspense fallback={<PanelLoading />}>
                 <PackagePolicy sessionFetch={sessionFetch} />

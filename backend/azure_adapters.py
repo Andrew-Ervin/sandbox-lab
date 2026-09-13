@@ -120,6 +120,15 @@ class AzureDeveloper(AzureWorkspaces):
 
     async def list(self): return [self.public(w) for w in await self.runtime.list('developer')]
 
+    def lookup(self, wid):
+        # Opening a known workspace does not need an inventory of its group.
+        # start() still verifies remote readiness before execution or IDE access.
+        from .identity import current_owner
+        record=self.runtime.record(wid)
+        if record['kind']!='developer' or record['state']=='deleted' or record.get('warm') or record.get('owner')!=current_owner.get():
+            raise ValueError('Workspace not found')
+        return self.public(self.runtime.workspace(record))
+
     async def start(self, name, *, owner=None, compute_size='light'):
         from .titles import clean_title
         from .identity import current_owner
@@ -131,15 +140,15 @@ class AzureDeveloper(AzureWorkspaces):
         self.touched[ws['id']]=time.time();self.configure(ws['id'],name)
         return self.public(ws)
 
-    async def prepare(self, workspace):
+    async def prepare(self, workspace, *, editor=True):
         await self.runtime.start(workspace['id'])
         self.touched[workspace['id']] = time.time()
         self.runtime.touch(workspace['id'])
         from .activity import background_activity
         if not background_activity.get():
             record=self.runtime.record(workspace['id']);record['last_opened_at']=time.time();self.runtime.save(record)
-            await self.runtime.editor_profiles.for_open(record)
-        if self.configured_until.get(workspace['id'], 0) < time.time():
+            if editor:await self.runtime.editor_profiles.for_open(record)
+        if editor and self.configured_until.get(workspace['id'], 0) < time.time():
             self.configure(workspace['id'], workspace['name'])
             # The editor is already healthy. Harness setup has its own visible
             # status and must not hold the editor open request behind npm work.

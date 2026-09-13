@@ -63,3 +63,14 @@ def test_project_appearance_migrates_with_backup_without_moving_project_rules(tm
     preferences.apply(profile)
     assert json.loads(workspace.read_text())=={'editor.tabSize':4}
     assert json.loads(workspace.with_suffix('.json.before-account-profile').read_text())==original
+
+
+@pytest.mark.asyncio
+async def test_unhealthy_peer_does_not_block_target_open():
+    from unittest.mock import Mock
+    a={'id':'a','owner':'alice','kind':'developer','state':'running'}
+    control=SimpleNamespace(db=sqlite3.connect(':memory:'),records=lambda:[a,{**a,'id':'b'}],resizing=set(),telemetry=SimpleNamespace(event=Mock()))
+    profiles=EditorProfiles(control);profiles.capture=AsyncMock(side_effect=RuntimeError('offline'));profiles.restore=AsyncMock()
+    await profiles.for_open(a)
+    profiles.restore.assert_awaited_once_with(a)
+    control.telemetry.event.assert_called_once()

@@ -65,7 +65,9 @@ class EditorProfiles:
             if (other['id']!=record['id'] and other.get('owner')==record.get('owner')
                     and other['kind']=='developer' and other['state']=='running'
                     and not other.get('warm') and other['id'] not in self.control.resizing):
-                await self.capture(other)
+                try:await self.capture(other)
+                except Exception:
+                    self.control.telemetry.event('developer',other['id'],'editor_peer_capture_failed',error='Using last saved editor profile; peer capture failed')
         await self.restore(record)
         profile=self.get(record.get('owner'))['profile']
         old=self.extension_tasks.get(record['id'])

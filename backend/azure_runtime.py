@@ -120,7 +120,7 @@ class AzureRuntime:
     async def start(self, wid, *, standby=False):
         if wid in self.resizing:raise RuntimeError('Workspace size is changing. Please wait.')
         kind=self.record(wid)['kind']
-        if not standby:self.warm.demand(kind)
+        if not standby:self.warm.demand(kind,self.record(wid).get('compute_size'))
         self.queued[kind]=self.queued.get(kind,0)+1
         begin=time.monotonic(); generation=self.admission_generation
         try:
@@ -349,7 +349,7 @@ class AzureRuntime:
         from .activity import background_activity
         tracked=not kwargs.get('bootstrap',False)
         foreground=tracked and not background_activity.get()
-        if foreground:self.touch(wid);self.warm.demand(self.record(wid)['kind'])
+        if foreground:self.touch(wid);self.warm.demand(self.record(wid)['kind'],self.record(wid).get('compute_size'))
         if tracked:self.active_commands[wid]=self.active_commands.get(wid,0)+1
         began=time.monotonic()
         try:
@@ -361,7 +361,7 @@ class AzureRuntime:
             raise
         finally:
             if tracked:self.active_commands[wid]-=1
-            if foreground:self.touch(wid);self.warm.demand(self.record(wid)['kind'])
+            if foreground:self.touch(wid);self.warm.demand(self.record(wid)['kind'],self.record(wid).get('compute_size'))
 
     async def _execute(self, wid, argv, *, stdin='', cwd='/home/sandbox/project', timeout=60, maximum=1_000_000,
                       limits=None, bootstrap=False, environment_setup=False):
@@ -560,7 +560,7 @@ class AzureRuntime:
                             if at>current.get('last_activity_at',0):
                                 current['last_activity_at']=at
                                 from .previews import previews
-                                if time.time()-at<60:previews.renew_workspace(record['id']);self.warm.demand('developer')
+                                if time.time()-at<60:previews.renew_workspace(record['id']);self.warm.demand('developer',record.get('compute_size'))
                             self.save(current);record=current
                     except Exception:pass
                 idle=self.is_idle(record)

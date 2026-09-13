@@ -51,11 +51,11 @@ def test_developer_preview_uses_the_copied_source_folder(tmp_path,monkeypatch):
 
 @pytest.mark.asyncio
 async def test_renamed_workstation_resumes_by_identity_without_creating_another(monkeypatch):
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, Mock
     workspace={'id':'existing','name':'My Renamed Workstation','status':'stopped'}
-    developer=SimpleNamespace(list=AsyncMock(return_value=[workspace]),prepare=AsyncMock(),ide=AsyncMock(return_value='http://127.0.0.1:5555/'),touched={})
+    developer=SimpleNamespace(lookup=Mock(return_value=workspace),prepare=AsyncMock(),ide=AsyncMock(return_value='http://127.0.0.1:5555/'),touched={})
     result=await AppLifecycle().human('existing',developer,None,ide=True)
-    developer.prepare.assert_awaited_once_with(workspace)
+    developer.prepare.assert_awaited_once_with(workspace,editor=True)
     assert result=='http://127.0.0.1:5555/'
 
 
@@ -70,3 +70,31 @@ async def test_preview_reuse_rejects_a_different_project_source(monkeypatch):
     assert await previews.ready_app('existing','.lab/imports/transfer_'+'b'*32) is None
     assert await previews.ready_app('existing',None) is None
     previews.azure_app.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_app_open_does_not_wait_for_editor_preferences_or_harness():
+    from unittest.mock import AsyncMock, Mock
+    ws={'id':'owned','name':'Example'}
+    developer=SimpleNamespace(lookup=Mock(return_value=ws),prepare=AsyncMock(),touched={},token='')
+    previews=SimpleNamespace(ready_app=AsyncMock(return_value=None),app=AsyncMock(return_value='preview'))
+    lifecycle=AppLifecycle();lifecycle.launch=AsyncMock()
+    assert await lifecycle.human('owned',developer,previews,ide=False)=='preview'
+    developer.prepare.assert_awaited_once_with(ws,editor=False)
+
+
+def test_local_workspace_lookup_enforces_owner_and_kind(tmp_path):
+    from backend.azure_adapters import AzureDeveloper
+    from backend.azure_runtime import AzureRuntime
+    from backend.identity import current_owner
+    adapter=object.__new__(AzureDeveloper)
+    adapter.runtime=AzureRuntime(tmp_path,{});adapter.harness={};adapter.setup_errors={}
+    record={'id':'owned','owner':'alice','name':'Example','kind':'developer','state':'running','created_at':1,'updated_at':1}
+    adapter.runtime.save(record)
+    token=current_owner.set('alice')
+    try:
+        assert adapter.lookup('owned')['id']=='owned'
+        for changes in ({'owner':'bob'},{'kind':'headless'},{'warm':True},{'state':'deleted'}):
+            adapter.runtime.save({**record,**changes})
+            with pytest.raises(ValueError,match='Workspace not found'):adapter.lookup('owned')
+    finally:current_owner.reset(token)

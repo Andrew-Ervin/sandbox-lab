@@ -34,4 +34,9 @@ Keep `.local`, `.env`, credentials, generated apps, conversation records and wor
 
 User identity and editor preferences are described in [Identity and personal settings](docs/IDENTITY.md). Workspace display names are independent of runtime identifiers. New workspaces default to 1 CPU / 2 GiB; the sandbox tiers are 1 / 2 / 20 GiB, 2 / 4 / 40 GiB and 4 / 8 / 80 GiB CPU, memory and disk. Changing size transfers the saved home to a new sandbox and reapplies the user's portable editor profile. The original stopped sandbox is retained for recovery.
 
-For Zac's ACA/AKS comparison and review-only network/identity templates, see [Network controls and workload identity](docs/NETWORK-IDENTITY.md).
+For the ACA/AKS comparison and review-only network/identity templates, see [Network controls and workload identity](docs/NETWORK-IDENTITY.md).
+
+[Workspace MCP examples](infra/azure-sandbox-pilot/examples/README.md) demonstrate
+managed connector attachment, direct Microsoft Learn tools, and scoped GitHub PR
+egress. See [Sandboxes versus regular Container Apps](docs/CONTAINER-APPS-CHOICE.md)
+for the service choice and startup/cost tradeoffs.

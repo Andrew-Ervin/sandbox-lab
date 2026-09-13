@@ -1,6 +1,8 @@
 # Network controls and workload identity
 
-The live Sandbox runtime creates every allocation with `EgressPolicy(default_action='Deny', traffic_inspection='Full')` in `scripts/azure_sandbox_rpc.py`. Package and model traffic uses authenticated reverse services to the trusted broker; arbitrary direct outbound traffic is denied. The package broker retains its release-age and approved-source checks. This applies to ACA **Sandboxes**, not ordinary Container Apps or AKS pods.
+The live Sandbox runtime creates every allocation with `EgressPolicy(default_action='Deny', traffic_inspection='Full')` in `scripts/azure_sandbox_rpc.py`. Package and model traffic uses authenticated reverse services to the trusted broker; arbitrary direct outbound traffic is denied. An operator can enable `workspace_mcp_learn: true` in private runtime configuration to allow only the Microsoft Learn MCP endpoint for developer workspaces. The package broker retains its release-age and approved-source checks. This applies to ACA **Sandboxes**, not ordinary Container Apps or AKS pods.
+
+The [MCP examples](../infra/azure-sandbox-pilot/examples/README.md) cover native connector attachment, direct Microsoft Learn and GitHub MCP, and a separate repository-scoped PR write policy. The direct Learn path is enabled in the pilot. Native Connector Namespace deployment is deferred by operator choice. The [service comparison](CONTAINER-APPS-CHOICE.md) explains what a regular Container App would replace and what remains application work.
 
 ## Domain filtering example
 
