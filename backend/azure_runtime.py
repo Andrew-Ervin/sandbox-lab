@@ -102,7 +102,9 @@ class AzureRuntime:
         if kind=='developer' and compute_size is not None and compute_size not in SIZES:raise ValueError('Unknown compute size')
         if kind != 'quick' and not disposable and not self.config.get('persistent_storage_reviewed'):
             raise RuntimeError('Persistent Azure storage is awaiting a verified price and cost approval. Disposable tests are enabled; existing files are preserved.')
-        if not warm:self.warm.demand(kind)
+        if not warm:
+            self.warm.demand(kind,compute_size)
+            await self.warm.retire_mismatched(kind,compute_size)
         async with self.lock:
             previous = next((r for r in self.records(kind) if name in (r['name'],r.get('display_name')) and r['state'] != 'deleted' and not r.get('warm') and r.get('owner')==owner), None)
             record = previous or (self.warm.claim(kind,name,disposable=disposable,compute_size=compute_size) if not warm else None)

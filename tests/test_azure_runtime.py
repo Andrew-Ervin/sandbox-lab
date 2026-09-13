@@ -231,6 +231,17 @@ async def test_clean_warm_sandbox_is_claimed_once_and_keeps_logical_identity(con
 
 
 @pytest.mark.asyncio
+async def test_requested_developer_tier_retires_mismatched_paid_standby(control):
+    control.config['profiles']={'developer':{'retained_limit':3,'active_limit':3}}
+    standby=await control.create('developer','standby',warm=True,disposable=True,compute_size='balanced')
+    await control.warm.retire_mismatched('developer','light')
+    assert control.record(standby['id'])['state']=='deleted'
+    assert any(call[0]=='delete' for call in control.transport.calls)
+    control.warm.demand('developer','light')
+    assert control.warm.compute_size=='light'
+
+
+@pytest.mark.asyncio
 async def test_waiting_admission_is_cancelled_by_stop_all(control):
     control.config['profiles']={'quick':{'retained_limit':3,'active_limit':1}}
     await control.create('quick','first')

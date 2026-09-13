@@ -9,9 +9,18 @@ class WarmPool:
         self.runtime=runtime; self.until={}; self.tasks={}; self.hits=0; self.misses=0
         self.paused=False
 
-    def demand(self, kind):
+    def demand(self, kind, compute_size=None):
         self.paused=False
         self.until[kind]=time.time()+600
+        if kind=='developer' and compute_size:
+            self.compute_size=compute_size
+
+    async def retire_mismatched(self, kind, compute_size):
+        """Release a paid standby that cannot serve the requested developer size."""
+        if kind!='developer' or not compute_size:return
+        for record in self.runtime.records(kind):
+            if record.get('warm') and record.get('compute_size','performance')!=compute_size and record['state'] not in ('deleted','stopped'):
+                await self.runtime.stop(record['id'],delete=True)
 
     def status(self, kind):
         records=[r for r in self.runtime.records(kind) if r.get('warm') and r['state']!='deleted']
@@ -35,7 +44,13 @@ class WarmPool:
                     except Exception:self.runtime.telemetry.event(kind,r['id'],'warm_cleanup_failed',error='Standby cleanup unconfirmed')
             else:
                 try:
-                    if not records:await self.runtime.create(kind,'standby-'+uuid.uuid4().hex[:12],disposable=True,warm=True)
+                    if kind=='developer':
+                        wanted_size=getattr(self,'compute_size','balanced')
+                        for record in records:
+                            if record.get('compute_size','performance')!=wanted_size:
+                                await self.runtime.stop(record['id'],delete=True)
+                        records=[r for r in self.runtime.records(kind) if r.get('warm') and r['state']!='deleted']
+                    if not records:await self.runtime.create(kind,'standby-'+uuid.uuid4().hex[:12],disposable=True,warm=True,compute_size=getattr(self,'compute_size',None))
                     elif records[0]['state']=='creating' and not records[0].get('create_submitted'):
                         await self.runtime.start(records[0]['id'],standby=True)
                 except Exception as e:self.runtime.telemetry.event(kind,'','warm_unavailable',error=str(e))

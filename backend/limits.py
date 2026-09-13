@@ -14,8 +14,8 @@ def validate():
     for name in KEYS:
         if name.endswith('_QUOTA'):continue
         number=value(name)
-        if number<0 or (number==0 and name != 'JOB_MAX_PENDING'):
-            raise ValueError(name+' must be positive (JOB_MAX_PENDING may be zero for no count cap)')
+        if number<=0:
+            raise ValueError(name+' must be positive')
     if value('DICTATION_MAX_BYTES')<44+(value('DICTATION_MAX_SECONDS')+2)*32000:
         raise ValueError('DICTATION_MAX_BYTES must fit mono 16 kHz PCM WAV plus two seconds of recorder tolerance')
     if value('WORKSPACE_TOKEN_RENEW_BEFORE_SECONDS')>=3600:raise ValueError('Workspace renewal margin must be less than one hour')

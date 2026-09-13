@@ -150,14 +150,14 @@ export function PreviewPanel({
           sandbox={
             preview.ide
               ? 'allow-scripts allow-same-origin allow-forms allow-downloads allow-modals allow-pointer-lock'
-              : 'allow-scripts allow-same-origin allow-forms allow-downloads'
+              : 'allow-scripts allow-forms allow-downloads'
           }
           allow={
             preview.ide
               ? 'clipboard-read; clipboard-write; microphone'
               : undefined
           }
-          referrerPolicy="no-referrer"
+          referrerPolicy={preview.ide ? 'no-referrer' : 'strict-origin-when-cross-origin'}
         />
       ) : (
         <div className="preview-message">

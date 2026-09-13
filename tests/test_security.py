@@ -67,18 +67,24 @@ async def test_preview_strips_cookie_and_auth(monkeypatch,kind):
         @asynccontextmanager
         async def stream(self,method,url,**kwargs):
             seen.update(kwargs)
-            yield httpx.Response(200,content=b'<h1>preview</h1>',headers={'Content-Type':'text/html','Set-Cookie':'stolen=yes'})
+            yield httpx.Response(200,content=b'<head></head><h1>preview</h1>',headers={'Content-Type':'text/html','Set-Cookie':'stolen=yes'})
     monkeypatch.setattr(module.httpx,'AsyncClient',FakeClient)
-    module.targets[5555]={'kind':kind,'upstream_port':5556,'expires':9999999999}
+    target={'kind':kind,'upstream_port':5556,'expires':9999999999}
+    path='/'
+    if kind=='app':
+        target['capability']='test-capability';path='/_lab/test-capability/'
+    module.targets[5555]=target
     async with transport_client(transport=httpx.ASGITransport(app=module.app),base_url='http://127.0.0.1:5555') as c:
-        response=await c.get('/',headers={'Cookie':'lab_session=secret','Authorization':'Bearer secret'})
+        response=await c.get(path,headers={'Cookie':'lab_session=secret','Authorization':'Bearer secret'})
     assert response.status_code==200
     assert 'cookie' not in seen['headers'] and 'authorization' not in seen['headers']
     assert 'set-cookie' not in response.headers
     policy=response.headers['Content-Security-Policy']
     if kind=='app':
-        assert policy.startswith('sandbox allow-scripts allow-forms allow-same-origin;')
+        assert policy.startswith('sandbox allow-scripts allow-forms;')
+        assert 'allow-same-origin' not in policy
         assert 'vscode-cdn.net' not in policy
+        assert b'<base href="/_lab/test-capability/">' in response.content
     else:
         assert 'https://*.vscode-resource.vscode-cdn.net/home/sandbox/.local/share/code-server/extensions/' in policy
         assert 'https://*.vscode-resource.vscode-cdn.net;' not in policy
@@ -91,10 +97,34 @@ async def test_preview_strips_cookie_and_auth(monkeypatch,kind):
 async def test_other_preview_origin_cannot_mutate_app(monkeypatch):
     import httpx
     import backend.preview as module
-    monkeypatch.setitem(module.targets,5558,{'kind':'app','upstream_port':1,'expires':9999999999})
+    monkeypatch.setitem(module.targets,5558,{'kind':'app','capability':'test-capability','upstream_port':1,'expires':9999999999})
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=module.app),base_url='http://127.0.0.1:5558') as client:
+        assert (await client.get('/write')).status_code==404
         for origin in ['null','http://127.0.0.1:5559','https://evil.example']:
-            assert (await client.post('/write',headers={'origin':origin})).status_code==403
+            assert (await client.post('/_lab/test-capability/write',headers={'origin':origin})).status_code==403
+
+
+@pytest.mark.asyncio
+async def test_opaque_app_relative_assets_use_the_preview_capability(monkeypatch):
+    import httpx
+    import backend.preview as module
+    transport_client=httpx.AsyncClient
+    seen=[]
+    class FakeClient:
+        def __init__(self,**kwargs):self.cookies=httpx.Cookies()
+        async def __aenter__(self):return self
+        async def __aexit__(self,*_):pass
+        from contextlib import asynccontextmanager
+        @asynccontextmanager
+        async def stream(self,method,url,**kwargs):
+            seen.append(url)
+            yield httpx.Response(200,content=b'asset',headers={'Content-Type':'application/javascript'})
+    monkeypatch.setattr(module.httpx,'AsyncClient',FakeClient)
+    monkeypatch.setitem(module.targets,5557,{'kind':'app','capability':'test-capability','upstream_port':5556,'expires':9999999999})
+    async with transport_client(transport=httpx.ASGITransport(app=module.app),base_url='http://127.0.0.1:5557') as client:
+        response=await client.get('/assets/main.js',headers={'Referer':'http://127.0.0.1:5557/_lab/test-capability/'})
+    assert response.status_code==200
+    assert seen==['http://127.0.0.1:5556/assets/main.js']
 
 
 @pytest.mark.asyncio

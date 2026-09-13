@@ -23,10 +23,11 @@ def public_configuration():
         try:return max(0,int(os.getenv(key,str(default))))
         except ValueError:return default
     from .azure_runtime import runtime
+    from .identity import identity
     control=runtime()
     return {'model':MODEL,'reasoning':REASONING,'project_engine':'azure',
             'storage':'Azure sandbox disks, private Blob source checkpoints and local chat SQLite',
-            'identity':'Single local owner; production Entra integration is not connected',
+            'identity':'Tenant-bound Microsoft Entra sign-in' if identity.enabled else 'Single local owner',
             'web_search_enabled':os.getenv('LAB_ALLOW_WEB_SEARCH','true').lower()=='true',
             'project_sync_seconds':number('PROJECT_SYNC_SECONDS',15),
             'warm_after_demand_seconds':600,'warm_per_active_role':1,

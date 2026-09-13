@@ -1,5 +1,5 @@
 """Bounded local preview leases; expired servers and port forwards are reclaimed."""
-import asyncio,json,os,socket,time,mimetypes
+import asyncio,json,os,socket,time,mimetypes,secrets
 from urllib.parse import urlsplit
 import uvicorn
 from . import preview
@@ -33,10 +33,13 @@ class Previews:
         from .identity import current_owner
         if not target.get('owner'):target['owner']=current_owner.get()
         sock=self.reserve(target);port=sock.getsockname()[1]
+        target={**target}
+        if target.get('kind')=='app':target['capability']=secrets.token_urlsafe(24)
         preview.targets[port]={**target,'expires':time.time()+(600 if target.get('kind')=='ide' else self.idle_seconds)}
         server=uvicorn.Server(uvicorn.Config(preview.app,host='127.0.0.1',port=port,log_level='error',access_log=False,timeout_graceful_shutdown=2))
         self.resources[port]={'server':server,'task':asyncio.create_task(server.serve(sockets=[sock])),'process':process,'log':log}
-        return f'http://127.0.0.1:{port}/'
+        suffix=f'/_lab/{target["capability"]}/' if target.get('kind')=='app' else '/'
+        return f'http://127.0.0.1:{port}{suffix}'
     def renew(self,url):
         port=urlsplit(url).port;resource=self.resources.get(port);target=preview.targets.get(port)
         if not resource or not target or resource['task'].done(): return False

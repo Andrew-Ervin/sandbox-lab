@@ -26,7 +26,18 @@ ARTIFACT_CSP="sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inli
 from .preview_bridge import BRIDGE as ACTIVITY
 _BRIDGE_HASH=base64.b64encode(hashlib.sha256(ACTIVITY.removeprefix(b'<script>').removesuffix(b'</script>')).digest()).decode()
 DOCUMENT_CSP="sandbox allow-scripts; default-src 'none'; script-src 'sha256-"+_BRIDGE_HASH+"'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'"
-APP_CSP="sandbox allow-scripts allow-forms allow-same-origin; default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-src 'none'; object-src 'none'"
+APP_CSP="sandbox allow-scripts allow-forms; default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-src 'none'; object-src 'none'"
+
+def app_path(target, path, request):
+    """Authorize opaque app frames by an unguessable, preview-scoped path."""
+    capability=target.get('capability','')
+    prefix='_lab/'+capability
+    if not capability:return None
+    if path==prefix:return ''
+    if path.startswith(prefix+'/'):return path[len(prefix)+1:]
+    referer=request.headers.get('referer','')
+    origin=f'http://127.0.0.1:{request.url.port}/{prefix}/'
+    return path if referer.startswith(origin) else None
 
 def ide_redirect(location, path, port):
     # code-server uses relative ./?folder= redirects on first open. Resolve only
@@ -42,7 +53,10 @@ async def preview(path:str,request:Request):
     port=request.url.port
     target=targets.get(port)
     if not target or target['expires']<time.time(): raise HTTPException(410,'Preview expired')
-    if not identity.preview_allowed(target,request.cookies):raise HTTPException(404,'Preview not found')
+    if target.get('kind')=='app':
+        path=app_path(target,path,request)
+        if path is None:raise HTTPException(404,'Preview not found')
+    elif not identity.preview_allowed(target,request.cookies):raise HTTPException(404,'Preview not found')
     if request.headers.get('host')!=f'127.0.0.1:{port}': raise HTTPException(403)
     common={'Content-Security-Policy':APP_CSP.replace("connect-src 'self'",f"connect-src 'self' ws://127.0.0.1:{port}"),'X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Cache-Control':'no-store','Access-Control-Allow-Origin':'null'}
     if target['kind']=='ide':
@@ -133,6 +147,8 @@ async def preview(path:str,request:Request):
         code=(ROOT/'sandbox/editor_layout.js').read_text().replace('__LAB_PROFILE__',__import__('json').dumps(profile.get('layout',{})).replace('<','\\u003c')).replace('__LAB_KEYS__',__import__('json').dumps(sorted(LAYOUT_KEYS)))
         body=body.replace(b'<head>',b'<head><script>'+code.encode()+b'</script>',1)
     if target['kind']!='ide' and 'text/html' in r.headers.get('content-type',''):
+        base=b'<base href="/_lab/'+target['capability'].encode()+b'/">'
+        body=body.replace(b'<head>',b'<head>'+base,1)
         common['X-Lab-Revision']=hashlib.sha256(body).hexdigest()
         common['Access-Control-Expose-Headers']='X-Lab-Revision'
         body.extend(ACTIVITY.replace(b'let revision=null',b'let revision="'+common['X-Lab-Revision'].encode()+b'"'))
@@ -145,10 +161,14 @@ async def preview_socket(websocket:WebSocket,path:str):
     from websockets.asyncio.client import connect
     from websockets.exceptions import WebSocketException
     port=websocket.url.port;target=targets.get(port)
-    if (not target or not identity.preview_allowed(target,websocket.cookies) or target.get('kind') not in ('app','ide') or target['expires']<time.time()
+    if (not target or target.get('kind') not in ('app','ide') or target['expires']<time.time()
         or websocket.headers.get('host')!=f'127.0.0.1:{port}'
-        or websocket.headers.get('origin') not in (f'http://127.0.0.1:{port}',)):
+        or (target.get('kind')=='ide' and (not identity.preview_allowed(target,websocket.cookies) or websocket.headers.get('origin')!=f'http://127.0.0.1:{port}'))):
         await websocket.close(code=1008);return
+    if target.get('kind')=='app':
+        path=app_path(target,path,websocket)
+        if path is None:
+            await websocket.close(code=1008);return
     url=f'ws://127.0.0.1:{target["upstream_port"]}/{path}'
     if websocket.url.query:url+='?'+websocket.url.query
     protocols=[p.strip() for p in websocket.headers.get('sec-websocket-protocol','').split(',') if p.strip()]
@@ -166,7 +186,7 @@ async def preview_socket(websocket:WebSocket,path:str):
                     if isinstance(message,str):await websocket.send_text(message)
                     else:await websocket.send_bytes(message)
             async def session_watch():
-                while identity.preview_allowed(target,websocket.cookies):await asyncio.sleep(10)
+                while target['expires']>time.time() and (target.get('kind')=='app' or identity.preview_allowed(target,websocket.cookies)):await asyncio.sleep(10)
                 await websocket.close(code=1008)
             tasks=[asyncio.create_task(incoming()),asyncio.create_task(outgoing()),asyncio.create_task(session_watch())]
             try:await asyncio.wait(tasks,return_when=asyncio.FIRST_COMPLETED)

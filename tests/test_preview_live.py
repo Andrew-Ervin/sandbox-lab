@@ -6,7 +6,9 @@ import pytest
 
 @pytest.mark.parametrize('kind,origin,expired', [('artifact','null',False),('app','https://evil.example',False),('app','null',True)])
 def test_preview_socket_rejects_untrusted_or_expired_targets(kind,origin,expired):
-    preview.targets[9998]={'kind':kind,'expires':time.time()+(-10 if expired else 60),'upstream_port':1}
+    target={'kind':kind,'expires':time.time()+(-10 if expired else 60),'upstream_port':1}
+    if kind=='app':target['capability']='test-capability'
+    preview.targets[9998]=target
     try:
         with TestClient(preview.app).websocket_connect('ws://127.0.0.1:9998/',headers={'origin':origin}):
             pytest.fail('unexpected connection')
@@ -25,12 +27,12 @@ async def test_preview_socket_relays_text_and_binary_without_credentials():
     async with serve(echo,'127.0.0.1',0,subprotocols=['vite-hmr']) as upstream:
         sock=socket.socket();sock.bind(('127.0.0.1',0));sock.listen();sock.setblocking(False)
         port=sock.getsockname()[1]
-        preview.targets[port]={'kind':'app','expires':time.time()+60,'upstream_port':upstream.sockets[0].getsockname()[1]}
+        preview.targets[port]={'kind':'app','capability':'test-capability','expires':time.time()+60,'upstream_port':upstream.sockets[0].getsockname()[1]}
         server=uvicorn.Server(uvicorn.Config(preview.app,log_level='error'))
         task=asyncio.create_task(server.serve(sockets=[sock]))
         try:
             while not server.started:await asyncio.sleep(.01)
-            async with connect(f'ws://127.0.0.1:{port}/hmr?token=test',origin=f'http://127.0.0.1:{port}',subprotocols=['vite-hmr'],additional_headers={'Cookie':'private=yes','Authorization':'Bearer private'},proxy=None) as client:
+            async with connect(f'ws://127.0.0.1:{port}/_lab/test-capability/hmr?token=test',origin=f'http://127.0.0.1:{port}',subprotocols=['vite-hmr'],additional_headers={'Cookie':'private=yes','Authorization':'Bearer private'},proxy=None) as client:
                 assert client.subprotocol=='vite-hmr'
                 for message in ['update',b'bytes']:
                     await client.send(message);assert await client.recv()==message

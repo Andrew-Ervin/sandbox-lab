@@ -9,6 +9,10 @@ def test_limits_reject_invalid_audio_budget(monkeypatch):
     monkeypatch.setenv('DICTATION_MAX_BYTES','1')
     with pytest.raises(ValueError,match='WAV'):validate()
 
+def test_limits_reject_unbounded_pending_jobs(monkeypatch):
+    monkeypatch.setenv('JOB_MAX_PENDING','0')
+    with pytest.raises(ValueError,match='JOB_MAX_PENDING'):validate()
+
 def test_operator_credentials_are_never_forwarded_to_generated_code(monkeypatch):
     monkeypatch.setenv('PRIVATE_SECRET','do-not-copy')
     monkeypatch.setenv('SYNC_MAX_FILE_BYTES','7')

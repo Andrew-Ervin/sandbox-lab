@@ -10,7 +10,7 @@ The unit of allocation is an isolated sandbox, not a chat and not a separately d
 | Headless | 2 / 4 GiB | 100 | 1,000 | 10 min | 60 min |
 | Developer | 2 / 4 GiB default; 1 / 2 or 4 / 8 optional | 100 | 1,000 | 10 min | 60 min |
 
-The existing Azure group quotas have been increased without allocating capacity. These are ceilings, not a promise that all can run simultaneously in this subscription. A **$12/hour aggregate compute admission guard** takes precedence during testing; additional work waits. There is no logical chat count cap. The broker permits 128 concurrent jobs and queues additional jobs; 32 command transfers and eight SDK workers bound local pressure. Project locks serialize changes to a shared home. The cumulative $200 test allowance uses a conservative $150 operational cutoff plus reserve for delayed billing and other costs. Do not remove these guards to demonstrate scale.
+The existing Azure group quotas have been increased without allocating capacity. These are ceilings, not a promise that all can run simultaneously in this subscription. A **$12/hour aggregate compute admission guard** takes precedence during testing; additional work waits. There is no logical chat count cap. The broker permits 128 concurrent jobs and queues up to 512 additional jobs; further work receives explicit backpressure before it allocates retained stream state. Thirty-two command transfers and eight SDK workers bound local pressure. Project locks serialize changes to a shared home. The cumulative $200 test allowance uses a conservative $150 operational cutoff plus reserve for delayed billing and other costs. Do not remove these guards to demonstrate scale.
 
 ## Warm capacity and stop policy
 
@@ -38,7 +38,7 @@ Supported Sandbox tiers are 0.25/0.5, 0.5/1, 1/2, 2/4 and 4/8 CPU/GiB. The works
 
 Sources: [Sandboxes overview](https://learn.microsoft.com/en-us/azure/container-apps/sandboxes-overview), [custom sessions](https://learn.microsoft.com/en-us/azure/container-apps/sessions-custom-container), [Container Apps billing](https://learn.microsoft.com/en-us/azure/container-apps/billing). Prices are planning estimates, exclude taxes and other meters, and must be refreshed before changing compute profiles.
 
-Preview opens probe an already-running app before invoking its startup recipe. Each preview keeps a bounded connection pool to its fixed sandbox tunnel, rejecting upstream cookies. Warm reconciliation runs independently for each role so a capacity wait cannot stall another role’s cleanup. Warm workstations use the balanced tier; light/performance opens may need a cold allocation.
+Preview opens probe an already-running app before invoking its startup recipe. Each preview keeps a bounded connection pool to its fixed sandbox tunnel, rejecting upstream cookies. Warm reconciliation runs independently for each role so a capacity wait cannot stall another role’s cleanup. A developer standby follows the most recently requested workspace tier. A standby in a different tier is retired before allocation, so it cannot keep incurring cost while the requested light, balanced, or performance workspace starts.
 
 The editor listener lease is ten minutes. Direct-editor user input renews it; unused open tabs do not create an endless keepalive. This is separate from short app/artifact preview leases.
 
