@@ -11,6 +11,7 @@ export function RecoveryChat({ thread, sessionFetch, onThread, onRefresh, onFull
   const [itemsThread,setItemsThread]=useState<string | null>(null);
   const [loading, setLoading] = useState(false), [sending, setSending] = useState(false);
   const [error, setError] = useState(''), [locked, setLocked] = useState(false);
+  const [readError,setReadError]=useState('');
   const [hasMore,setHasMore]=useState(false);
   const firstPage = useRef(true);
   const drafts = useRef(new Map<string,string>());
@@ -21,17 +22,18 @@ export function RecoveryChat({ thread, sessionFetch, onThread, onRefresh, onFull
     if (!response.ok) throw Error(`Conversation could not load (${response.status}).`);
     const data: any = await response.json();
     if (generation.current === version && selected.current === id) {
+      setReadError('');
       setItemsThread(id);setItems(current=>{const latest=data.items?.data || [];const ids=new Set(latest.map((i:any)=>i.id));return [...current.filter(i=>!ids.has(i.id)),...latest];});if(firstPage.current){setHasMore(Boolean(data.items?.has_more));firstPage.current=false;} setLocked(data.status?.type === 'locked');
     }
   };
   useEffect(() => {
     const version = ++generation.current;
     if(!thread)setItemsThread(null);
-    firstPage.current=true;setItems([]); setHasMore(false); setError(''); setDraft(drafts.current.get(thread || 'new') || ''); setLocked(false); setLoading(Boolean(thread));
+    firstPage.current=true;setItems([]); setHasMore(false); setError(''); setReadError(''); setDraft(drafts.current.get(thread || 'new') || ''); setLocked(false); setLoading(Boolean(thread));
     let active = true, timer: ReturnType<typeof setTimeout>;
     const update = async () => {
       try { if (thread) await read(thread, version); }
-      catch (e) { if(active) setError((e as Error).message); }
+      catch (e) { if(active) setReadError((e as Error).message); }
       finally { if(active) {setLoading(false); timer=setTimeout(update, 1500);} }
     };
     if(thread) void update();
@@ -77,6 +79,7 @@ export function RecoveryChat({ thread, sessionFetch, onThread, onRefresh, onFull
       {!thread && !waiting && <p>What do you want to work on?</p>}
     </div>
     {error && <p role="alert">{error}</p>}
+    {readError && <p role="alert">{readError} Retrying…</p>}
     {(sending || locked) && <p role="status">Response running. You can switch conversations; the job continues.</p>}
     <form onSubmit={e=>{e.preventDefault();void send();}} className="recovery-composer">
       <textarea aria-label="Message" value={draft} onChange={e=>{setDraft(e.target.value);drafts.current.set(thread || 'new',e.target.value);}} maxLength={30000} placeholder="Message Sandbox Lab" disabled={waiting || sending}/>
