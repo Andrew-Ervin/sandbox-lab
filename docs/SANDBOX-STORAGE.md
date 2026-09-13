@@ -27,3 +27,5 @@ Small execution requests write and launch in one SDK call. Bootstrap combines di
 A fresh synthetic headless environment reached execution readiness in 4.24 seconds and completed a file write plus code execution in 4.98 seconds. Its measured allocation was 0.93 seconds and bootstrap 2.98 seconds. This is one local pilot measurement, not a service SLA or concurrent-load percentile. Warm claims avoid allocation/bootstrap, but still verify the broker connection. Native memory resume preserves expensive application initialization; aggressively archiving recently used environments would undermine that benefit.
 
 References: [Azure snapshot lifecycle](https://learn.microsoft.com/en-us/azure/container-apps/sandboxes-snapshots-state-management), [sandbox volumes and tiers](https://learn.microsoft.com/en-us/azure/container-apps/sandboxes-overview), [Blob pricing](https://azure.microsoft.com/en-us/pricing/details/storage/blobs/).
+
+Saved app listings read local metadata immediately while cloud inventory and health refresh in the background. Pending observations are marked stale and do not assert readiness; opening still checks the runtime.

@@ -165,13 +165,13 @@ async def logout(request:Request):
 @app.get('/api/status')
 async def status(request: Request):
     infrastructure,live=await asyncio.gather(health.get(compute,headless),live_containers.get())
-    if request.state.owner != identity.admin:
-        live={'pods':[],'workspaces':[], 'observed_at':time.time()}
-        infrastructure={}
     runs=store.runs(request.state.owner,details=False)
     app_runs=store.apps(request.state.owner)
     for run in runs+app_runs:
         run['runtime_status']='static' if run.get('preview_artifact') else runtime(run.get('workspace_id'),None,live,'lab-agents') if run.get('workspace_id') else ('running' if any(p['name']==run.get('pod') for p in live['pods']) else 'released')
+    if request.state.owner != identity.admin:
+        live={'pods':[],'workspaces':[], 'observed_at':time.time(),'unavailable_namespaces':[]}
+        infrastructure={}
     return {'runtime_health':runtime_health_status(),'project_reserve':headless.reserve.status(),'containers':live,'idle_policy':{'project_seconds':idle.project_idle,'developer_seconds':idle.developer_idle,'error':idle.error},**infrastructure, 'openrouter':bool(API_KEY), 'model':MODEL, 'reasoning':REASONING, 'coding_engine':'azure-broker' if azure_enabled() else os.getenv('PROJECT_ENGINE','ori-pi'), 'pool':compute.status(), 'credential_renewal':{'developer_error':developer.renewal_error},'idle_workspaces_stopped':idle.stopped, 'runs':runs,'apps':app_runs,'jobs':[{k:v for k,v in j.items() if k!='owner'} for j in store.jobs(request.state.owner)]}
 @app.get('/api/threads')
 async def threads(request: Request):
