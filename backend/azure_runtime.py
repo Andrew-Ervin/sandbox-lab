@@ -409,6 +409,7 @@ class AzureRuntime:
                 await self.transport.write(group, sid, f'/var/lib/lab/requests/{ident}.request',payload.encode())
             await self.root_exec(record, 'python -I -c '+shlex.quote(launcher))
             async with asyncio.timeout(timeout+45):
+                poll_delay = .4
                 while True:
                     if not bootstrap and self.record(wid)['state']!='running':
                         raise RuntimeError('Workspace stopped while this command was running; no further file reads were sent.')
@@ -417,10 +418,17 @@ class AzureRuntime:
                         result = json.loads(raw)
                         break
                     except AzureError as error:
-                        if error.status_code != 404: raise
-                    await asyncio.sleep(.4)
+                        if error.status_code not in (404, 429): raise
+                        if error.status_code == 429: poll_delay = max(poll_delay, 5)
+                    # Long agents previously generated 150 reads/minute each.
+                    # Retry only observation of this already-launched command.
+                    await asyncio.sleep(poll_delay)
+                    poll_delay = min(5, poll_delay * 1.5)
             for suffix in ('request','result'):
-                await self.transport.call('remove_file', group, sid, {'path':f'/var/lib/lab/requests/{ident}.{suffix}'})
+                try:
+                    await self.transport.call('remove_file', group, sid, {'path':f'/var/lib/lab/requests/{ident}.{suffix}'})
+                except AzureError as error:
+                    self.telemetry.event(record['kind'], wid, 'command_cleanup_failed', error=str(error))
             return result
 
     async def ensure_services(self, record):

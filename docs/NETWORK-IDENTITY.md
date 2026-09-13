@@ -23,3 +23,5 @@ Yes, Ori can route through APIM. Our Ori adapters already replace provider endpo
 Ordinary ACA domain egress filtering generally uses VNet routing and a firewall/proxy architecture. That is a different deployment from the Sandbox built-in egress engine. Firewall/APIM tiers can introduce fixed charges and require approval under the testing budget before deployment.
 
 References: [Sandbox egress controls](https://learn.microsoft.com/en-us/azure/container-apps/sandboxes-egress-policies), [Sandbox groups and identity](https://learn.microsoft.com/en-us/azure/container-apps/sandboxes-quickstart-bicep), [Container Apps identity](https://learn.microsoft.com/en-us/azure/container-apps/managed-identity), [Container Apps with Azure Firewall](https://learn.microsoft.com/en-us/azure/container-apps/use-azure-firewall).
+
+Operations configuration plan, sample APIM policy, identity setup and acceptance checks: [APIM and Ori operations](APIM-ORI-OPERATIONS.md).

@@ -2,7 +2,7 @@
 
 The pilot uses a single-tenant Microsoft Entra web registration with the callback `http://127.0.0.1:3000/api/auth/callback`. It requests OpenID basic identity scopes, not mailbox, directory-read or Azure management permissions. The registration itself creates no compute resource or fixed hosting charge.
 
-Private `.local/entra.json` contains `tenant_id`, `client_id`, `client_secret`, `admin_oid` and `redirect_uri`. Never publish this file. The current pilot secret expires on **2026-12-13** and must be rotated through Entra before then. The local callback is for the local pilot; a public deployment needs HTTPS, secure cookies, a reviewed redirect origin and a shared session store.
+Private `.local/entra.json` contains `tenant_id`, `client_id`, `client_secret`, `admin_oid` and `redirect_uri`. Never publish this file. Track the configured secret expiry privately and rotate it through Entra before expiration. The local callback is for the local pilot; a public deployment needs HTTPS, secure cookies, a reviewed redirect origin and a shared session store.
 
 The server uses authorization code + PKCE, a browser-bound one-time state and nonce, tenant-pinned JWKS, RS256 signature verification, audience/issuer checks and token lifetime checks. It discards provider tokens after sign-in and retains a private revocable session. The session lifetime is bounded by eight hours and the validated ID-token expiration. Signing out revokes that app session; an existing Microsoft browser session may make the next sign-in immediate.
 

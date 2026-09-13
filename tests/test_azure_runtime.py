@@ -299,3 +299,17 @@ async def test_app_only_resume_defers_editor_until_editor_open(control):
     control.install_ide.assert_awaited_once()
     await control.start(ws['id'],editor=True)
     assert control.install_ide.await_count==1
+
+@pytest.mark.asyncio
+async def test_command_result_rate_limit_retries_read_without_relaunch(control,monkeypatch):
+ record={'id':'poll-test','kind':'quick','name':'poll','state':'running','lease_until':time.time()+60,'sandbox_id':'sid'}
+ control.save(record)
+ control.root_exec=AsyncMock()
+ control.transport.read=AsyncMock(side_effect=[AzureError('read',404),AzureError('read',429),b'{"exit_code":0,"stdout":"ok"}'])
+ control.transport.call=AsyncMock(side_effect=AzureError('remove_file',429))
+ sleep=AsyncMock();monkeypatch.setattr('backend.azure_runtime.asyncio.sleep',sleep)
+ result=await control._execute(record['id'],['python','-c','print(1)'])
+ assert result['stdout']=='ok'
+ control.root_exec.assert_awaited_once()
+ assert control.transport.read.await_count==3
+ assert [c.args[0] for c in sleep.await_args_list]==[.4,5]

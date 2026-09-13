@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { ChatKit, useChatKit } from '@openai/chatkit-react';
 import { CodingSessionStrip } from '@/components/coding-session-strip';
+import { RecoveryChat } from '@/components/recovery-chat';
 import { loadChatKit } from '@/lib/chatkit-loader';
 import { ThreadNavigation } from '@/lib/thread-navigation';
 import { ChatTransport } from '@/lib/chat-transport';
@@ -196,12 +197,13 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
   const { openPreview: showPreviewPane } = panes;
   const [chatReady, setChatReady] = useState(false);
   const [chatSlow, setChatSlow] = useState(false);
+  const [recoveryChat, setRecoveryChat] = useState(false);
   const [chatEpoch, setChatEpoch] = useState(0);
   const recovering = useRef(false);
   const [threadLoading, setThreadLoading] = useState(false);
   useEffect(() => {
     if (chatReady && !threadLoading) { setChatSlow(false); return; }
-    const timer = window.setTimeout(() => setChatSlow(true), 30000);
+    const timer = window.setTimeout(() => { setChatSlow(true); setRecoveryChat(true); }, 8000);
     return () => window.clearTimeout(timer);
   }, [chatReady, threadLoading, chatEpoch]);
   const transport = useRef(new ChatTransport());
@@ -711,6 +713,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
       if (!navigating.current) setThreadLoading(false);
     },
     onThreadChange: ({ threadId }) => {
+      if (recoveryChat) return;
       if (navigating.current && threadId !== navigation.current.requested) return;
       setThread(threadId);
       void refresh();
@@ -746,6 +749,15 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
     4000,
     { enabled: Boolean(thread) && view === 'chat' },
   );
+  useEffect(() => {
+    if (!recoveryChat) return;
+    navigation.current.version++;
+    loadCompletion.current?.reject(Error('Using text view'));
+    loadCompletion.current=null;
+    navigating.current=false;
+    recovering.current=false;
+    setThreadLoading(false);
+  }, [recoveryChat]);
   const selectThread = (id: string | null) => {
     navigating.current = true;
     filesRequest.current++;
@@ -756,6 +768,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
     setView('chat');
     setPreview(null);
     setThread(id);
+    if (recoveryChat) { navigating.current=false; setThreadLoading(false); return; }
     void navigation.current.select(id, async (target) => {
       await transport.current.detach();
       if (chatReady && target === loadedThread.current) return;
@@ -1147,16 +1160,18 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
               className="conversation"
               style={{ display: view === 'chat' ? 'flex' : 'none' }}
             >
+              <div className="flex justify-end px-3">{!recoveryChat && <Button variant="ghost" size="sm" onClick={() => setRecoveryChat(true)}>Use text view</Button>}</div>
               <ArchiveNotice
                 chat={threads.find((t) => t.id === thread)}
                 project={projects.find((p) => p.id === threadProject)}
               />
               <div
                 className="chat-stage"
-                aria-busy={!chatReady || threadLoading}
+                aria-busy={!recoveryChat && (!chatReady || threadLoading)}
               >
-                {(!chatReady || threadLoading) && (
-                  <div className="chat-loading" role="status">
+                {recoveryChat && <RecoveryChat thread={thread} sessionFetch={sessionFetch} onThread={setThread} onRefresh={() => { void refresh(); }} onFullView={() => {loadedThread.current=null;navigation.current=new ThreadNavigation();setRecoveryChat(false);setChatReady(false);setChatSlow(false);recovering.current=true;setChatEpoch(n=>n+1);}} />}
+                {!recoveryChat && (!chatReady || threadLoading) && (
+                  <div className="chat-loading" data-transition={threadLoading || undefined} role="status">
                     <span className="skeleton-line wide" />
                     <span className="skeleton-line" />
                     <span className="skeleton-card" />
@@ -1171,6 +1186,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                         loadCompletion.current = null;
                         navigation.current.version++;
                         navigation.current = new ThreadNavigation();
+                        loadedThread.current = null;
                         navigating.current = false;
                         recovering.current = true;
                         setChatReady(false); setThreadLoading(false); setChatSlow(false);
@@ -1180,12 +1196,12 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                     </div>}
                   </div>
                 )}
-                <div inert={!chatReady || threadLoading} aria-hidden={!chatReady || threadLoading || undefined} style={{ height: '100%', width: '100%', minWidth: 0 }}>
+                <div inert={!chatReady || threadLoading} aria-hidden={!chatReady || threadLoading || undefined} style={{ height: '100%', width: '100%', minWidth: 0, display: recoveryChat ? 'none' : 'block' }}>
                 <ChatKit
                   key={chatEpoch}
                   control={chat.control}
                   className="chat-surface"
-                  style={{ opacity: !chatReady || threadLoading ? 0 : 1 }}
+                  style={{ opacity: !chatReady || threadLoading ? 0 : 1, transition: !chatReady || threadLoading ? 'none' : 'opacity 140ms ease-out' }}
                 />
                 </div>
               </div>

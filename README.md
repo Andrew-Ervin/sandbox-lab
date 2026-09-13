@@ -46,3 +46,5 @@ See [execution profiling and retention economics](docs/PERFORMANCE-PROFILE.md) f
 See [sandbox storage and archival](docs/SANDBOX-STORAGE.md) for the opt-in seven-day home-to-Blob policy, verified rebuild, safety limits and startup measurements.
 
 Built-in Python comparison, measured latency and billing: [Conversation Python and built-in sessions](docs/PYTHON-SESSION-COMPARISON.md).
+
+If the embedded chat stalls, a locally rendered text view keeps existing conversations and message submission available without the external chat document. Full interactive cards remain available through **Try full view**. Operations deployment guidance for model routing: [APIM and Ori](docs/APIM-ORI-OPERATIONS.md).

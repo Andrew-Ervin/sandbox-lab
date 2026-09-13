@@ -12,7 +12,9 @@ class BuiltinPython(AzureQuick):
     def __init__(self):
         super().__init__()
         self.runtime.python_pool_status=self.status
-        self.capacity=int(self.runtime.config.get('builtin_session_limit',10))
+        self.capacity=self.runtime.config.get('builtin_session_limit',10)
+        if type(self.capacity) is not int or not 1 <= self.capacity <= 10:
+            raise ValueError('builtin_session_limit must be an integer from 1 through 10 for this pilot')
         self.slots=asyncio.Semaphore(self.capacity)
         self.runtime.budget.db.execute('CREATE TABLE IF NOT EXISTS python_sessions(identifier TEXT PRIMARY KEY, started REAL, expires REAL, paid_hours INTEGER)')
 

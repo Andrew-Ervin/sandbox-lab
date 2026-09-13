@@ -56,3 +56,8 @@ def test_pool_prompt_does_not_claim_custom_packages(monkeypatch):
  text=runtime_system(SYSTEM)
  assert '1 CPU, 4 GiB' in text and 'RDKit/ASE' not in text
  assert 'do not assume' in text
+
+@pytest.mark.parametrize('capacity',[0,-1,11,100,True,1.5,'5'])
+def test_invalid_pilot_limit_rejected_before_semaphore(monkeypatch,capacity):
+ monkeypatch.setattr('backend.builtin_python.AzureQuick.__init__',lambda self:setattr(self,'runtime',SimpleNamespace(config={'builtin_session_limit':capacity})))
+ with pytest.raises(ValueError,match='1 through 10'):BuiltinPython()
