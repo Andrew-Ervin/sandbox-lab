@@ -41,6 +41,12 @@ def install_project_actions(app,store,headless):
         for record in control.records('quick'):
             if record.get('owner')==owner and record.get('thread_id') in tids and record['state']!='deleted':
                 await control.stop(record['id'],delete=True)
+        if control.config.get('builtin_session_endpoint'):
+            import hashlib
+            for tid in tids:
+                identity=hashlib.sha256((owner+'\0'+tid).encode()).hexdigest()
+                await control.transport.call('builtin_delete',control.profile('quick')['group'],args={'identifier':identity})
+                control.budget.db.execute('DELETE FROM python_sessions WHERE identifier=?',(identity,))
         if control.storage.enabled:
             for tid in tids:await control.storage.delete('chats',tid)
 

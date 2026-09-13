@@ -1,10 +1,16 @@
 # Conversation Python and built-in sessions
 
-The default quick-Python path uses one preinstalled scientific sandbox per owner/conversation while it is live. Concurrent calls in one conversation serialize. Calls start fresh interpreters, preserve bounded working-file checkpoints locally and in private Blob, and do not carry model credentials. Ten idle minutes or the compute lease/budget boundary releases the disposable VM. The next request reconstructs from saved files. Explicit conversation/project deletion removes its matching quick VM and Blob checkpoint before removing local history.
+The deployed routing uses a built-in Python session pool for quick numerical work, headless project sandboxes for unavailable dependencies, shell tools, repository changes or longer execution, and separate developer workspaces for interactive work. Ordinary discussion allocates none of these.
 
-`infra/azure-sandbox-pilot/builtin-sessions.json` creates a separate built-in PythonLTS pool for comparison: 10 concurrent sessions, 3,300 seconds of inactivity, blocked egress, no custom image, dedicated environment, registry or workload identity. `scripts/builtin_session_client.py` hashes owner plus conversation into a stable session ID; callers must authenticate and authorize the conversation before invoking it. This comparison client is not the default `run_python` backend. The pool keeps interpreter state and `/mnt/data` until expiry; it has no automatic durable-file restore. Never put provider keys or Azure credentials inside it.
+Set `builtin_session_endpoint` and `builtin_session_limit` in the private runtime configuration to select the pool. Without an endpoint, the custom scientific sandbox remains the explicit compatibility fallback. No uncertain execution is automatically replayed in another backend. The assistant is told the actual baseline instead of assuming all custom-image packages are present.
 
-The built-in network setting is all-or-nothing. Egress remains disabled; installing uv or packages from arbitrary internet endpoints is not enabled. The observed image includes Polars, NumPy, SciPy, Plotly and scikit-learn, but not uv. An attempted request to PyPI failed. The custom sandbox retains the existing minimum-package-age gateway for roles that permit package installation.
+The pool has a 3,300-second inactivity timeout and a stable owner/conversation identity. Calls in one conversation serialize. Each call runs a fresh bounded interpreter; Python globals do not persist. Working files and artifacts follow the existing per-conversation checkpoint contract (40 files, 8 MB each, 16 MB total), with broker-owned local/Blob persistence. Payload and result files use Azure's file API to avoid inline-code/stdout truncation. Temporary program directories are separate from checkpointed working files. Azure credentials remain in the private credential worker.
+
+The current pilot permits ten allocated pool sessions. New conversations beyond that limit fail before execution with a capacity explanation; this is a pilot guard, not a production queue. Continued activity can cross billing hours. A persistent local ledger conservatively accounts for allocated hours; it is not an Azure invoice. Operations distinguishes estimates/reservations, delayed provider billing and optional operator-reported spend. Session counts are broker estimates and do not include external clients. Deleting a conversation terminates its matching pool session before deleting saved state. Idle expiry needs no running broker.
+
+Egress remains disabled. Polars, NumPy, SciPy, Plotly and scikit-learn were verified; uv is absent and a PyPI request failed. Missing dependencies belong in the headless environment with its existing five-day package-age gateway. Interactive Plotly HTML is retained; static rendering depends on tools in the built-in image.
+
+The source template creates no dedicated environment, registry or workload identity. `scripts/builtin_session_client.py` remains a minimal comparison client; `backend/builtin_python.py` is the app adapter.
 
 ## Measured pilot results
 
@@ -36,3 +42,7 @@ The East US 2 retail meter observed during this pilot is $0.03 per allocated bui
 At a full 55 active minutes, the current quick sandbox is about $0.099 versus $0.03 for a one-hour built-in allocation. At very short lifetimes, per-second sandbox billing can be cheaper; its ten-minute warm tail must be included. Blob, retained-state storage, requests and model inference are separate. The built-in comparison has a $1 reservation within the existing $200 pilot cap.
 
 Sources: [session-pool configuration](https://learn.microsoft.com/en-us/azure/container-apps/session-pool), [code-interpreter APIs](https://learn.microsoft.com/en-us/azure/container-apps/sessions-code-interpreter), [hourly rounding](https://learn.microsoft.com/en-us/azure/container-apps/billing#code-interpreter), [Azure pricing](https://azure.microsoft.com/en-us/pricing/details/container-apps/).
+
+## App integration follow-up
+
+The app adapter’s test artifact/save/restore calls took approximately 0.7–1.7 seconds including file transfer and checkpoint handling. Explicitly deleting a test session and recreating it restored its saved file successfully. These include work omitted by the bare execution comparison above. See [headless CLI comparison](HEADLESS-HARNESS-COMPARISON.md) for Pi, Codex and Claude Code on a larger coding task.

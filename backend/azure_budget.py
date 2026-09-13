@@ -29,6 +29,7 @@ class AzureBudget:
         estimated = initial + self.db.execute('SELECT COALESCE(SUM(amount),0) FROM charges').fetchone()[0]
         row = self.db.execute("SELECT value FROM budget_meta WHERE key='billed'").fetchone()
         billed = row[0] if row else 0
+        reported = self.db.execute("SELECT value FROM budget_meta WHERE key='operator_reported_spend'").fetchone()
         # Conservative: billing can include already-counted usage. Taking max
         # avoids double-counting while retaining every in-flight reservation.
         open_reserved = self.db.execute('SELECT COALESCE(SUM(amount),0) FROM charges WHERE ended IS NULL').fetchone()[0]
@@ -38,7 +39,10 @@ class AzureBudget:
                 'other_allowance_usd': self.other_allowance, 'committed_usd': round(committed, 6),
                 'available_usd': round(max(0, self.cutoff-committed), 6),
                 'blocked': committed >= self.cutoff, 'hourly_rates': RATES,
-                'billing_is_delayed': True, 'fixed_cost_approvals': []}
+                'billing_is_delayed': True, 'billing_available': row is not None,
+                'operator_reported_spend_usd': reported[0] if reported else None,
+                'open_reservations_usd': round(open_reserved,6),
+                'estimated_completed_usd': round(estimated-open_reserved,6), 'fixed_cost_approvals': []}
 
     def reserve(self, kind, amount):
         if not math.isfinite(amount) or amount <= 0: raise ValueError('Invalid cost reservation')

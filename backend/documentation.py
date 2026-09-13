@@ -26,6 +26,9 @@ def public_configuration():
     from .identity import identity
     control=runtime()
     return {'model':MODEL,'reasoning':REASONING,'project_engine':'azure',
+            'quick_backend':'builtin-python-session-pool' if control.config.get('builtin_session_endpoint') else 'custom-scientific-sandbox',
+            'python_idle_seconds':3300 if control.config.get('builtin_session_endpoint') else 600,
+            'python_pool':{'configured':bool(control.config.get('builtin_session_endpoint')),'cpu':1,'memory_gib':4,'max_allocated_sessions':control.config.get('builtin_session_limit',10)},
             'storage':'Azure sandbox disks, private Blob source checkpoints and local chat SQLite',
             'identity':'Tenant-bound Microsoft Entra sign-in' if identity.enabled else 'Single local owner',
             'web_search_enabled':os.getenv('LAB_ALLOW_WEB_SEARCH','true').lower()=='true',

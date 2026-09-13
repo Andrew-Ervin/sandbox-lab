@@ -1,6 +1,6 @@
 # Sandbox Lab
 
-A local workspace with tenant-bound Microsoft Entra sign-in and per-user history, projects and workstations for chat, Python, coding projects, generated apps and a browser editor. React, shadcn and ChatKit provide the interface; FastAPI owns jobs and inference. All remote execution uses **Azure Container Apps Sandboxes**. OpenRouter supplies the configured model.
+A local workspace with tenant-bound Microsoft Entra sign-in and per-user history, projects and workstations for chat, Python, coding projects, generated apps and a browser editor. React, shadcn and ChatKit provide the interface; FastAPI owns jobs and inference. Remote execution uses **Azure Container Apps built-in Python sessions and Sandboxes**. OpenRouter supplies the configured model.
 
 ## Run locally
 
@@ -11,7 +11,7 @@ Follow [local setup](docs/LOCAL-SETUP.md), provide your own private credentials,
 | Work | Compute | Persistence |
 |---|---|---|
 | Ordinary conversation | Local broker and model inference | Local SQLite history; no project allocation |
-| Short Python | Custom scientific image, 1 CPU / 2 GiB | Per-chat files and artifacts; fresh interpreter each call |
+| Short Python | Built-in Python pool, 1 CPU / 4 GiB when configured | Per-chat files and artifacts; fresh interpreter each call |
 | Headless coding | One sandbox per project, 2 CPU / 4 GiB | Independent project home; chats in that project reuse it |
 | Developer workstation | Independent sandbox, 1 CPU / 2 GiB by default; selectable through 4 CPU / 8 GiB | VS Code, Pi/Ori and developer packages/history |
 | App | Process in the owning project's or workstation's sandbox | Saved source and launch recipe; no separate Azure app per preview |
@@ -24,7 +24,7 @@ Project names use 1–4 words from the opening request. Workstations receive a r
 
 ## Controls and validation
 
-Quick code has no network or model credential. Headless inference stays in the trusted broker. Developer tools share a short-lived capability for that workstation's OpenRouter gateway; developer code can reuse that capability. Package downloads retain the five-day age gate and explicit human exceptions. See [security](docs/SECURITY.md), [packages](docs/PACKAGES.md), and [GUI tools](docs/GUI_HARNESSES.md).
+Quick code has no network or model credential. Configured built-in Python sessions expire after 55 idle minutes; unsupported dependencies and longer work use the headless project. Headless inference stays in the trusted broker. Developer tools share a short-lived capability for that workstation's OpenRouter gateway; developer code can reuse that capability. Package downloads retain the five-day age gate and explicit human exceptions. See [security](docs/SECURITY.md), [packages](docs/PACKAGES.md), and [GUI tools](docs/GUI_HARNESSES.md).
 
 Operations shows resource allocations, running/warm/queued counts, event durations, failures and estimated/reserved cost. Azure billing is delayed. Stop compute in Azure runtime to retain saved files and stop metered execution. Stored data and the approved Basic registry continue to incur their respective charges.
 
@@ -41,7 +41,7 @@ managed connector attachment, direct Microsoft Learn tools, and scoped GitHub PR
 egress. See [Sandboxes versus regular Container Apps](docs/CONTAINER-APPS-CHOICE.md)
 for the service choice and startup/cost tradeoffs.
 
-See [execution profiling and retention economics](docs/PERFORMANCE-PROFILE.md) for measured fresh, concurrent and live execution latency. Python reuses an owner-scoped conversation sandbox while active, saves a checkpoint after each call, and deletes idle compute after ten minutes. Operations includes a read-only deployed-service inventory and package/storage usage.
+See [execution profiling and retention economics](docs/PERFORMANCE-PROFILE.md) for measured fresh, concurrent and live execution latency. Configured quick Python reuses an owner-scoped built-in session, saves a checkpoint after each call, and expires after 55 idle minutes. Operations includes a read-only deployed-service inventory and package/storage usage.
 
 See [sandbox storage and archival](docs/SANDBOX-STORAGE.md) for the opt-in seven-day home-to-Blob policy, verified rebuild, safety limits and startup measurements.
 

@@ -63,3 +63,5 @@ Operations now includes a five-minute background ARM inventory, provisioning sta
 A matched 10 MiB archival test verified identical file hashes: native resume/read 3.464s, archive 20.151s, Blob rebuild/read 7.266s. The policy remains seven inactive days; recommendations are documented without raising the pilot capacity or budget limits.
 
 Chat navigation regression checks include rapid old/new/old selection, waiting for content load after SDK command acknowledgement, and failure recovery. Browser validation must verify the final conversation contents, not only disappearance of the loading overlay. Built-in pool comparisons use `scripts/builtin_session_client.py` with server-owned user/conversation identifiers; credentials stay in the caller.
+
+Pool routing validation covers owner-scoped identities, hourly accounting, capacity rejection before execution, no replay after ambiguous errors, credential-free file payloads, artifact download and durable checkpoint restore. Verify the configured pool with a browser Python request after changing its endpoint.

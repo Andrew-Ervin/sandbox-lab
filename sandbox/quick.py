@@ -1,4 +1,5 @@
 """This supervisor and the generated program live inside a disposable pod."""
+import shutil
 import json, os, resource, signal, subprocess, sys, tempfile, base64, re, time
 from pathlib import Path
 from collect import collect
@@ -6,6 +7,12 @@ from checkpoint import restore,collect_checkpoint
 request = json.load(sys.stdin)
 code = request['code']
 if not isinstance(code, str) or len(code) > int(os.getenv('QUICK_CODE_CHARS','100000')): raise ValueError('Invalid code size')
+# A reused quick VM must begin from only the supplied checkpoint and inputs.
+# rmtree does not traverse a top-level symlink; its fd-based implementation
+# protects nested traversal on the supported Linux runtime.
+for entry in Path('/workspace').iterdir():
+    if entry.is_symlink() or not entry.is_dir(): entry.unlink()
+    else: shutil.rmtree(entry)
 Path('/workspace/artifacts').mkdir(exist_ok=True)
 Path('/workspace/files').mkdir(exist_ok=True)
 total=0

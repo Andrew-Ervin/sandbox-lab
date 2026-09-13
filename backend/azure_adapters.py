@@ -200,7 +200,8 @@ class AzureQuick:
         from .scaling import WarmPolicy
         self.runtime = runtime(); self.ready = False; self.error = None
         self.slots = asyncio.Semaphore(self.runtime.profile('quick')['active_limit']); self.queued = 0; self.executing = 0
-        self.thread_locks = {}
+        from weakref import WeakValueDictionary
+        self.thread_locks = WeakValueDictionary()
         self.policy = WarmPolicy(0,0,600,minimum=0); self.refill = asyncio.Event()
 
     async def pool(self):

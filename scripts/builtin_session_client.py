@@ -13,7 +13,7 @@ def session_identifier(owner,thread_id):
 class BuiltinSessions:
     def __init__(self,endpoint,token):
         parsed=urlsplit(endpoint)
-        if parsed.scheme!='https' or not re.fullmatch(r'[a-z0-9]+\.dynamicsessions\.io',parsed.hostname or '') or parsed.query or parsed.fragment or parsed.username or parsed.port:
+        if parsed.scheme!='https' or not re.fullmatch(r'[a-z0-9]+\.dynamicsessions\.io',parsed.hostname or '') or parsed.query or parsed.fragment or parsed.username is not None or parsed.password is not None or parsed.port:
             raise ValueError('Unexpected built-in session endpoint')
         if not re.fullmatch(r'/subscriptions/[a-fA-F0-9-]{36}/resourceGroups/[\w.()-]+/sessionPools/[a-z][a-z0-9]+/?',parsed.path):raise ValueError('Unexpected pool resource path')
         self.endpoint=endpoint.rstrip('/')

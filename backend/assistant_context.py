@@ -22,11 +22,17 @@ INPUT_FILES = {'type':'array','items':{'type':'string'},'description':'Names fro
 
 def runtime_system(text):
     """The verified custom images provide the documented scientific baseline."""
+    from .azure_runtime import runtime
+    if runtime().config.get('builtin_session_endpoint'):
+        start=text.index('Quick Python has a fresh interpreter')
+        end=text.index('Working files are checkpointed',start)
+        text=text[:start]+"Quick Python runs in a conversation-scoped built-in Python pool, with a fresh interpreter per call, 1 CPU, 4 GiB RAM, blocked internet and a 30-second execution limit. The verified baseline includes polars, numpy, scipy, plotly and scikit-learn; do not assume the custom scientific image's other packages are present. Missing packages, shell tools, longer jobs and repository changes belong in delegate_project. Do not replay a timed-out or uncertain execution automatically. "+text[end:]
+        text=text.replace('Quick Plotly show()/write_html() produce preview images through the sandbox renderer.', 'Quick Plotly show()/write_html() preserve interactive HTML; static images depend on the built-in renderer availability.')
     return text
 
 
 TOOLS = [
-    {'type':'function','function':{'name':'run_python','description':'Run necessary bounded numerical work, supplied-data analysis, simulations or charts. Do not use for research, advice, explanations or simple arithmetic. Uses a fresh Python interpreter in this conversation’s isolated scientific sandbox; saved files persist and the live box is reused.','parameters':{'type':'object','properties':{'code':{'type':'string'},'purpose':{'type':'string'},'input_files':INPUT_FILES},'required':['code','purpose'],'additionalProperties':False}}},
+    {'type':'function','function':{'name':'run_python','description':'Run necessary bounded numerical work, supplied-data analysis, simulations or charts. Do not use for research, advice, explanations or simple arithmetic. Uses a fresh Python interpreter in this conversation’s isolated Python environment; saved files persist and the live session is reused.','parameters':{'type':'object','properties':{'code':{'type':'string'},'purpose':{'type':'string'},'input_files':INPUT_FILES},'required':['code','purpose'],'additionalProperties':False}}},
     {'type':'function','function':{'name':'delegate_project','description':'Execute requested software implementation/debugging or numerical work that exceeds quick Python. Creates persistent project compute: do NOT use for web research, pricing/API lookup, conceptual questions, or speculative package installation.','parameters':{'type':'object','properties':{'task':{'type':'string'},'mode':{'type':'string','enum':['analysis','app']},'input_files':INPUT_FILES},'required':['task','mode'],'additionalProperties':False}}},
     {'type':'function','function':{'name':'read_documentation','description':'Read the application’s curated configuration/help documents and current non-secret settings. Use for questions about how this application, workspaces, packages, security or scaling work. Does not create a workspace.','parameters':{'type':'object','properties':{'topic':{'type':'string','enum':['overview','projects','packages','security','scaling','azure','developer','setup']},'query':{'type':'string','description':'Optional focused question or keywords to select relevant sections.'}},'required':['topic'],'additionalProperties':False}}},
 ]

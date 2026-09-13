@@ -65,3 +65,7 @@ Microsoft Entra tenant/object identity scopes project/history ownership and work
 ## Inactive home archival
 
 With the operator's seven-day archive policy enabled, stopped headless and developer homes move to verified private Blob archives. Opening recreates compute and restores the saved home, while logical identity and history remain. Running processes and scratch state outside the home are not preserved. See [storage policy](SANDBOX-STORAGE.md) for safeguards, capacity limits and failure behavior.
+
+## Quick Python routing
+
+When a built-in session endpoint is configured, quick Python uses one owner/conversation session with 55-minute idle expiry. Bounded saved files survive expiry through local/Blob checkpoints; interpreter variables do not. Missing packages and longer or shell-based work use headless project delegation. Developer workstations remain separate. See [Python sessions](PYTHON-SESSION-COMPARISON.md).

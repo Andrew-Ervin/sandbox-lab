@@ -80,6 +80,9 @@ def invoke(data):
     with contextlib.nullcontext(client(config, data['group'])) as group:
         action = data['action']
         args = data.get('args', {})
+        if action in ('builtin_execute','builtin_delete'):
+            from builtin_session_rpc import execute
+            return execute(config, _credential, {**args,'delete':action=='builtin_delete'})
         if action == 'service_inventory':
             from azure_service_inventory import inventory
             return inventory(config, _credential)

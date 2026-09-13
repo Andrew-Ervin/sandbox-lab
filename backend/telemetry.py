@@ -22,6 +22,9 @@ class Telemetry:
             running=[r for r in records if r['state']=='running']
             p=runtime.profile(kind)
             rows[kind]={'running':len(running),'warm':sum(bool(r.get('warm')) for r in running),'busy':sum(runtime.active_commands.get(r['id'],0)>0 or r['id'] in getattr(runtime,'resizing',set()) for r in running),'queued':runtime.queued.get(kind,0),'cpu':sum(int(runtime.allocation(r)['cpu'][:-1])/1000 for r in running),'memory_gib':sum(int(runtime.allocation(r)['memory'][:-2])/1024 for r in running),'retained':len(records)}
+        if hasattr(runtime,'python_pool_status'):
+            pool=runtime.python_pool_status();n=pool['allocated_sessions']
+            rows['python']={'running':n,'warm':max(0,n-pool['executing']),'busy':pool['executing'],'queued':pool['queued'],'cpu':n,'memory_gib':n*4,'retained':n}
         body={'roles':rows,'estimated_and_reserved_usd':runtime.budget.status()['estimated_and_reserved_usd']}
         with self.db:
             self.db.execute('INSERT INTO samples VALUES (?,?)',(now,json.dumps(body)))

@@ -42,3 +42,10 @@ def test_learn_setup_rejects_saved_command_under_approved_name(tmp_path,client):
     if client=='codex':p.write_text('[mcp_servers.microsoft-learn]\ncommand="unexpected"\n')
     else:(tmp_path/'.claude.json').write_text(json.dumps({'mcpServers':{'microsoft-learn':{'command':'unexpected'}}}))
     with pytest.raises(ValueError,match='Conflicting'):configure_learn_mcp(tmp_path)
+
+def test_codex_conflict_does_not_modify_claude(tmp_path):
+    (tmp_path/'.codex').mkdir()
+    (tmp_path/'.codex/config.toml').write_text('[mcp_servers.microsoft-learn]\ncommand="other"\n')
+    claude=tmp_path/'.claude.json';original='{"mcpServers": {}}';claude.write_text(original)
+    with pytest.raises(ValueError,match='Conflicting'):configure_learn_mcp(tmp_path)
+    assert claude.read_text()==original
