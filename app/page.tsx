@@ -1066,7 +1066,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
             max={420}
           />
         </Sidebar>
-        <main className="lab-main">
+        <main className={`lab-main ${panes.previewOpen && preview?.workspace ? 'workspace-preview-open' : ''}`}>
           {preparingProjectChat && (
             <div className="workspace-source-notice" role="status">
               Preparing chat and copying workspace files…

@@ -59,3 +59,7 @@ requires live validation when changing harness or provider versions.
 Usage totals are account-scoped across developer workspaces and the broker's headless
 coding loop, starting when accounting was enabled. Provider-reported cost includes
 cache discounts; missing cost remains pending rather than being estimated as zero.
+
+Full-width workspaces use one 36px application toolbar, with navigation beside the
+workspace name. The outer app header is hidden while that toolbar is active, including
+compact layouts. Editor frames stay mounted when switching to the app preview.

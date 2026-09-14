@@ -8,6 +8,7 @@ import {
   MoreHorizontal,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { SidebarTrigger } from '@/components/ui/sidebar';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuCheckboxItem, DropdownMenuRadioGroup, DropdownMenuRadioItem } from '@/components/ui/dropdown-menu';
 import { ResizeHandle } from '@/components/panel-resize';
 import type { Preview, Workspace } from '@/lib/lab-types';
@@ -56,7 +57,7 @@ export function PreviewPanel({
   return (
     <aside
       aria-hidden={!visible}
-      className={`preview-panel ${previewFull ? 'expanded' : ''}`}
+      className={`preview-panel ${previewFull ? 'expanded' : ''} ${preview.workspace ? 'workspace-preview' : ''}`}
       style={
         {
           '--preview-width': previewWidth + '%',
@@ -77,7 +78,8 @@ export function PreviewPanel({
       )}
       <div className="preview-toolbar">
         <div>
-          <strong>{preview.title}</strong>
+          {preview.workspace && <SidebarTrigger className="workspace-sidebar-trigger" aria-label="Toggle navigation" title="Toggle navigation" />}
+          <strong title={preview.title}>{preview.title}</strong>
         </div>
         <div>
           {preview.workspace && (
