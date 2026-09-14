@@ -94,7 +94,7 @@ class Bridge:
                     parsed=urlsplit(path);query=parse_qs(parsed.query)
                     if parsed.path=='/v1/messages' and all(k=='beta' and v==['true'] for k,v in query.items()):path=parsed.path
                     elif parsed.path=='/v1/models' and all(k=='client_version' and len(v)==1 and len(v[0])<40 for k,v in query.items()):path=parsed.path
-                    if (method,path) not in (('POST','/v1/chat/completions'),('POST','/v1/responses'),('POST','/v1/messages'),('GET','/v1/models')):raise ValueError('Route denied')
+                    if (method,path) not in (('POST','/v1/chat/completions'),('POST','/v1/responses'),('POST','/v1/messages'),('GET','/v1/models'),('GET','/v1/usage')):raise ValueError('Route denied')
                 elif method!='GET' and not gallery_query and not (method=='HEAD' and re.fullmatch(r'/artifact/[a-f0-9]{64}(?:/[^/?]+)?',path)):raise ValueError('Method denied')
                 if not self.reverse: raise RuntimeError('Broker disconnected')
                 body = await reader.readexactly(length)

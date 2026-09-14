@@ -44,6 +44,6 @@ async def configure(adapter, workspace):
     package_setup = (ROOT/'sandbox/package_setup.py').read_text()
     templates = {str(p.relative_to(ROOT/'sandbox/ori-templates')):p.read_text() for p in (ROOT/'sandbox/ori-templates').rglob('*') if p.is_file() and not p.is_symlink()}
     extensions=json.loads((ROOT/'infra/editor-extensions.lock.json').read_text())['extensions']
-    payload = {**issue(workspace['id']), 'gui':True, 'package_setup':package_setup, 'ori_templates':templates, 'editor_extensions':extensions,'microsoft_learn_mcp':learn}
+    payload = {**issue(workspace['id']), 'gui':True, 'package_setup':package_setup, 'ori_templates':templates, 'cost_tracker':{p.name:p.read_text() for p in (ROOT/'sandbox/cost-tracker').iterdir() if p.name in ('package.json','extension.js')}, 'editor_extensions':extensions,'microsoft_learn_mcp':learn}
     await adapter.invoke(workspace,script+'\nimport json,sys; print(json.dumps(configure(json.load(sys.stdin))))',payload,timeout=300)
     adapter.capability_until[workspace['id']] = payload['expires']

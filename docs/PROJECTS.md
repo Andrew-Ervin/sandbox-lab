@@ -69,3 +69,5 @@ With the operator's seven-day archive policy enabled, stopped headless and devel
 ## Quick Python routing
 
 When a built-in session endpoint is configured, quick Python uses one owner/conversation session with 55-minute idle expiry. Bounded saved files survive expiry through local/Blob checkpoints; interpreter variables do not. Missing packages and longer or shell-based work use headless project delegation. Developer workstations remain separate. See [Python sessions](PYTHON-SESSION-COMPARISON.md).
+
+Switching a workstation's Workspace / App preview tabs keeps its editor iframe mounted while loading or showing the app. This preserves the browser-side extension session. Reload preview explicitly reloads the visible frame; closing the page still disconnects it. Retention does not override the sandbox idle policy or make browser-hosted agents durable across page closure.

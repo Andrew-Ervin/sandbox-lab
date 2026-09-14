@@ -1,0 +1,1 @@
+{"name":"model-costs","displayName":"Model Costs","description":"Your aggregate coding-tool costs reported by the workspace broker.","version":"0.1.0","publisher":"sandbox-lab","engines":{"vscode":"^1.90.0"},"main":"./extension.js","activationEvents":["onStartupFinished"],"contributes":{"commands":[{"command":"lab.modelCosts","title":"Model Costs: Show Usage"}]}}

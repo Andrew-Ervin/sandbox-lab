@@ -48,3 +48,5 @@ See [sandbox storage and archival](docs/SANDBOX-STORAGE.md) for the opt-in seven
 Built-in Python comparison, measured latency and billing: [Conversation Python and built-in sessions](docs/PYTHON-SESSION-COMPARISON.md).
 
 If the embedded chat stalls, a locally rendered text view keeps existing conversations and message submission available without the external chat document. Full interactive cards remain available through **Try full view**. Operations deployment guidance for model routing: [APIM and Ori](docs/APIM-ORI-OPERATIONS.md).
+
+Workspace [model costs](docs/MODEL-COST-TRACKER.md) are available in Operations and the editor status bar, with provider cache accounting and explicit unknown-cost coverage. The brokered Open VSX marketplace keeps general workspace egress closed; see [GUI tools](docs/GUI_HARNESSES.md).

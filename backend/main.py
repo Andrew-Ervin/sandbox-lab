@@ -131,7 +131,10 @@ async def local_security(request: Request, call_next):
         return JSONResponse({'detail':'Untrusted origin'}, 403)
     if request.url.path not in ('/api/bootstrap','/api/auth/login','/api/auth/callback'):
         token = request.cookies.get('lab_session', '')
-        entry = identity.session(token)
+        try:
+            entry = await identity.authenticate(token)
+        except HTTPException as exc:
+            return JSONResponse({'detail':exc.detail}, exc.status_code)
         if not entry:
             return JSONResponse({'detail':'Sign in to continue'}, 401)
         if request.method != 'GET' and not secrets.compare_digest(request.headers.get('x-lab-csrf', ''), entry['csrf']):
@@ -149,10 +152,11 @@ async def local_security(request: Request, call_next):
     return response
 @app.post('/api/bootstrap')
 async def bootstrap(request: Request):
+    await identity.authenticate(request.cookies.get('lab_session', ''))
     return identity.bootstrap(request)
 
 @app.get('/api/auth/login')
-async def login(): return identity.login()
+async def login(fresh: bool = False): return identity.login(fresh=fresh)
 
 @app.get('/api/auth/callback')
 async def callback(request:Request): return await identity.callback(request)
@@ -458,3 +462,10 @@ async def operations_snapshot(request: Request):
     # Existing middleware authenticates the single local owner. Production requires an admin role.
     from .operations import snapshot
     return await snapshot()
+
+
+@app.get('/api/model-usage')
+async def model_usage_snapshot(request: Request):
+    from .model_usage import ledger,schedule_reconciliation
+    schedule_reconciliation(request.state.owner)
+    return JSONResponse(ledger().summary(request.state.owner),headers={'Cache-Control':'no-store'})

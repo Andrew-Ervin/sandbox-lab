@@ -211,6 +211,23 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
   const lastJobSync = useRef('');
   const csrf = useRef(boot.csrf);
   const renewing = useRef<Promise<void> | null>(null);
+  const [signinRequired, setSigninRequired] = useState(false);
+  const reconnect = useCallback(async () => {
+    const response = await fetch('/api/bootstrap', {method:'POST'});
+    if (!response.ok) { setSigninRequired(true); return; }
+    const next = await response.json() as Boot;
+    // Never display another account's cached data after switching identity.
+    if (next.user?.id !== boot.user?.id) { window.location.reload(); return; }
+    csrf.current = next.csrf;
+    setSigninRequired(false);
+  }, [boot.user?.id]);
+  useEffect(() => {
+    if (!signinRequired) return;
+    const resume = () => { void reconnect(); };
+    window.addEventListener('focus', resume);
+    const timer = window.setInterval(resume, 15000);
+    return () => { window.removeEventListener('focus', resume); window.clearInterval(timer); };
+  }, [signinRequired, reconnect]);
   const sessionFetch = useCallback(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const send = () => {
@@ -227,12 +244,14 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
               .catch(() => null)) as { detail?: string } | null)
           : null;
       const staleCsrf = rejection?.detail === 'Invalid CSRF token';
-      if(response.status===401 && boot.auth==='entra'){window.location.assign('/');throw Error('Please sign in again.');}
+      if(response.status===401 && boot.auth==='entra'){setSigninRequired(true);throw Error('Sign in again using the reconnect notice. Your workspace remains open.');}
       if (response.status === 401 || staleCsrf) {
         renewing.current ??= fetch('/api/bootstrap', { method: 'POST' })
           .then(async (r) => {
             if (!r.ok) throw Error('Could not reconnect to the lab.');
-            csrf.current = ((await r.json()) as Boot).csrf;
+            const next = (await r.json()) as Boot;
+            if (next.user?.id !== boot.user?.id) { window.location.reload(); throw Error('Account changed.'); }
+            csrf.current = next.csrf;
           })
           .finally(() => {
             renewing.current = null;
@@ -288,6 +307,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
   const previewRequest = useRef(0);
   const lastActivity = useRef(Date.now());
   const previewElement = useRef<HTMLIFrameElement>(null);
+  const editorUrls = useRef(new Map<string, string>());
   const [statusStale, setStatusStale] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceName, setWorkspaceName] = useState('dev');
@@ -377,7 +397,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
       const request = ++previewRequest.current;
       showPreviewPane();
       lastActivity.current = Date.now();
-      setPreview({ title, endpoint, workspace, ide });
+      setPreview({ title, endpoint, workspace, ide, url: ide ? editorUrls.current.get(endpoint) : undefined });
       if (preview?.endpoint !== endpoint) {
         setPreviewFull(view !== 'chat' || Boolean(workspace));
         setFitPreview(true);
@@ -404,6 +424,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
             );
           data = { url: result.url };
         } else data = await api<{ url: string }>(endpoint + '?resolve=1');
+        if (ide) editorUrls.current.set(endpoint, data.url);
         if (request === previewRequest.current)
           setPreview((current) =>
             current?.endpoint === endpoint
@@ -1017,6 +1038,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
             )}
           </SidebarContent>
           <SidebarFooter className="p-4">
+            {signinRequired && <div role="alert"><p>Sign in again to reconnect. Your workspace stays open.</p><a href="/api/auth/login?fresh=1" target="_blank" rel="noopener noreferrer">Sign in with Microsoft</a><Button variant="ghost" onClick={() => void reconnect()}>Reconnect</Button></div>}
             {boot.user?.admin!==false && <Button
               variant="ghost"
               className="justify-start"

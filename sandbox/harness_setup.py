@@ -52,6 +52,11 @@ def configure(data):
         configure_copilot(home,bin,data,prefix)
         configure_gui_harnesses(home, bin, data, prefix)
         configure_editor_extensions(home, data)
+        tracker=home/'.local/share/code-server/extensions/sandbox-lab.model-costs-0.1.0'
+        if data.get('cost_tracker'):
+            tracker.mkdir(parents=True,exist_ok=True)
+            for name in ('package.json','extension.js'):
+                (tracker/name).write_text(data['cost_tracker'][name])
         extensions=home/'.local/share/code-server/extensions';extensions.mkdir(parents=True,exist_ok=True)
         legacy=extensions/'sandbox-lab.pi-ori-0.1.0'
         if legacy.is_symlink(): legacy.unlink()

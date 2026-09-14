@@ -17,6 +17,7 @@ _packages = None
 def packages():
     global _packages
     if _packages is None:
+        os.environ.setdefault('LAB_EDITOR_MARKETPLACE', 'true')
         os.environ['PACKAGE_CACHE'] = str(STATE/'azure-runtime/package-cache')
         os.environ['PACKAGE_POLICY'] = str(ROOT/'infra/packages.json')
         from sandbox import package_gateway
@@ -85,7 +86,7 @@ async def serve(runtime, record, ready=None):
                             else:response = await package_client.request(request['method'],path)
                             if response.status_code>=400:runtime.telemetry.event('package',record['id'],'package_request_failed',error=f'Package gateway HTTP {response.status_code}')
                         elif request['service'] == 'model' and model_client:
-                            if (request['method'],path) not in (('POST','/v1/chat/completions'),('POST','/v1/responses'),('POST','/v1/messages'),('GET','/v1/models')): raise ValueError('Model route denied')
+                            if (request['method'],path) not in (('POST','/v1/chat/completions'),('POST','/v1/responses'),('POST','/v1/messages'),('GET','/v1/models'),('GET','/v1/usage')): raise ValueError('Model route denied')
                             raw = base64.b64decode(request['body'], validate=True)
                             if len(raw)>2_000_000: raise ValueError('Model request too large')
                             # The existing gateway validates expiry/signature. Also
@@ -94,6 +95,12 @@ async def serve(runtime, record, ready=None):
                             authorization = request.get('authorization','')
                             auth = gateway.authorize(Request({'type':'http','headers':[(b'authorization',authorization.encode())]}))
                             if auth['workspace'] != record['id']: raise ValueError('Workspace capability mismatch')
+                            if path=='/v1/usage':
+                                from .model_usage import ledger,schedule_reconciliation
+                                schedule_reconciliation(record['owner'])
+                                response=httpx.Response(200,json=ledger().summary(record['owner']))
+                                await send({'type':'headers','status':200,'content_type':'application/json'})
+                                await send({'type':'body','data':base64.b64encode(response.content).decode()});await send({'type':'end'});return
                             if path=='/v1/models':
                                 models=auth.get('models',[auth['model']])
                                 response=httpx.Response(200,json={'object':'list','models':[],'data':[{'id':item,'object':'model','owned_by':'lab'} for item in models]})
@@ -108,6 +115,12 @@ async def serve(runtime, record, ready=None):
                             body = gateway.prepare_body(json.loads(raw),auth) if protocol == 'completions' else gateway.prepare_native(json.loads(raw), protocol,auth)
                             charge = runtime.budget.reserve('model',model_reservation(runtime,body,auth.get('catalog')))
                             response = await model_client.post(path,json=body,headers={'Authorization':authorization})
+                            if response.status_code<300:
+                                try:
+                                    from .model_usage import ledger
+                                    ledger().record(ident,record['owner'],body['model'],protocol,response.content)
+                                except Exception:
+                                    runtime.telemetry.event('model',record['id'],'usage_record_failed',error='Usage accounting unavailable')
                         else: raise ValueError('Service denied')
                         if len(response.content)>250_000_000: raise ValueError('Service response too large')
                         await send({'type':'headers','status':response.status_code,'content_type':response.headers.get('content-type','application/octet-stream'),'content_length':int(response.headers['content-length']) if response.headers.get('content-length','').isdigit() else None})

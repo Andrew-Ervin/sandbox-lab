@@ -112,7 +112,8 @@ def register(url,digest,eco,name,version,published,algorithm='sha256'):
 @app.middleware('http')
 async def readonly(request,call_next):
     gallery_query=request.method=='POST' and request.url.path=='/vscode/gallery/extensionquery'
-    if (request.method not in ['GET','HEAD'] and not gallery_query) or request.url.query or request.headers.get('authorization') or request.headers.get('cookie'):
+    platform_query=request.method in ('GET','HEAD') and request.url.path.startswith('/vscode/assets/') and re.fullmatch(r'targetPlatform=(?:universal|undefined|linux-x64|linux-arm64|linux-armhf|alpine-x64|alpine-arm64|web|darwin-x64|darwin-arm64|win32-x64|win32-arm64|win32-ia32)',request.url.query)
+    if (request.method not in ['GET','HEAD'] and not gallery_query) or (request.url.query and not platform_query) or request.headers.get('authorization') or request.headers.get('cookie'):
         return Response('Only approved package reads are permitted',status_code=403)
     response=await call_next(request);save_catalog();response.headers['X-Content-Type-Options']='nosniff';return response
 @app.get('/healthz')

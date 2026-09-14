@@ -95,3 +95,57 @@ async def test_legacy_migration_preserves_rows_and_backs_up_to_fixed_admin(auth,
         assert db.execute('SELECT owner FROM threads').fetchone()[0]=='local-owner'
     auth.migrate_legacy(store,control)
     assert len(list((tmp_path/'identity-backups').iterdir()))==1
+
+@pytest.mark.asyncio
+async def test_refresh_rotates_once_preserves_absolute_expiry_and_owner(auth, monkeypatch):
+    import asyncio
+    expiry=time.time()+2000
+    auth.sessions['token']={'owner':auth.admin,'expires':expiry,'provider_expires':time.time()-1,
+        'refresh_token':'old','nonce':'nonce','csrf':'csrf'}
+    calls=[]
+    async def post(client,url,**kwargs):
+        calls.append(kwargs['data']);await asyncio.sleep(.01)
+        return httpx.Response(200,json={'id_token':'signed','refresh_token':'new'},request=httpx.Request('POST',url))
+    async def validate(raw,nonce,refresh=False):
+        assert refresh and nonce=='nonce'
+        return {'tid':auth.config['tenant_id'],'oid':auth.config['admin_oid'],'exp':time.time()+1000}
+    monkeypatch.setattr(httpx.AsyncClient,'post',post);monkeypatch.setattr(auth,'validate_token',validate)
+    entries=await asyncio.gather(*(auth.authenticate('token') for _ in range(5)))
+    assert len(calls)==1 and all(e['owner']==auth.admin for e in entries)
+    assert entries[0]['refresh_token']=='new' and entries[0]['expires']==expiry
+    assert auth.session('token') is not None
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,revoked',[(400,True),(503,False),(429,False)])
+async def test_refresh_denial_revokes_but_transient_failure_keeps_recovery(auth,monkeypatch,status,revoked):
+    auth.sessions['token']={'owner':auth.admin,'expires':time.time()+500,'provider_expires':time.time()-1,
+        'refresh_token':'old','nonce':'nonce'}
+    async def post(client,url,**kwargs):
+        return httpx.Response(status,json={'error':'invalid_grant'},request=httpx.Request('POST',url))
+    monkeypatch.setattr(httpx.AsyncClient,'post',post)
+    if revoked: assert await auth.authenticate('token') is None
+    else:
+        with pytest.raises(HTTPException) as exc: await auth.authenticate('token')
+        assert exc.value.status_code==503
+    assert ('token' not in auth.sessions)==revoked
+    assert auth.session('token') is None
+
+def test_fresh_signin_requests_interactive_flow_and_refresh_scope(auth):
+    params=parse_qs(urlsplit(auth.login(fresh=True).headers['location']).query)
+    assert params['prompt']==['login']
+    assert 'offline_access' in params['scope'][0].split()
+
+@pytest.mark.asyncio
+async def test_refresh_rejects_account_change_and_never_extends_absolute_expiry(auth,monkeypatch):
+    calls=[]
+    async def post(client,url,**kwargs):
+        calls.append(1)
+        return httpx.Response(200,json={'id_token':'signed'},request=httpx.Request('POST',url))
+    async def validate(*args,**kwargs):
+        return {'tid':auth.config['tenant_id'],'oid':str(uuid.uuid4()),'exp':time.time()+1000}
+    monkeypatch.setattr(httpx.AsyncClient,'post',post);monkeypatch.setattr(auth,'validate_token',validate)
+    auth.sessions['expired']={'owner':auth.admin,'expires':time.time()-1,'refresh_token':'old'}
+    assert await auth.authenticate('expired') is None and not calls
+    auth.sessions['changed']={'owner':auth.admin,'expires':time.time()+500,'provider_expires':0,'nonce':'nonce','refresh_token':'old'}
+    assert await auth.authenticate('changed') is None
+    assert 'changed' not in auth.sessions

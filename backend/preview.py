@@ -56,7 +56,9 @@ async def preview(path:str,request:Request):
     if target.get('kind')=='app':
         path=app_path(target,path,request)
         if path is None:raise HTTPException(404,'Preview not found')
-    elif not identity.preview_allowed(target,request.cookies):raise HTTPException(404,'Preview not found')
+    else:
+        await identity.authenticate(request.cookies.get('lab_session', ''))
+        if not identity.preview_allowed(target,request.cookies):raise HTTPException(404,'Preview not found')
     if request.headers.get('host')!=f'127.0.0.1:{port}': raise HTTPException(403)
     common={'Content-Security-Policy':APP_CSP.replace("connect-src 'self'",f"connect-src 'self' ws://127.0.0.1:{port}"),'X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Cache-Control':'no-store','Access-Control-Allow-Origin':'null'}
     if target['kind']=='ide':
@@ -166,6 +168,10 @@ async def preview_socket(websocket:WebSocket,path:str):
     from websockets.asyncio.client import connect
     from websockets.exceptions import WebSocketException
     port=websocket.url.port;target=targets.get(port)
+    if target and target.get('kind') == 'ide':
+        try: await identity.authenticate(websocket.cookies.get('lab_session', ''))
+        except HTTPException:
+            await websocket.close(code=1013); return
     if (not target or target.get('kind') not in ('app','ide') or target['expires']<time.time()
         or websocket.headers.get('host')!=f'127.0.0.1:{port}'
         or (target.get('kind')=='ide' and (not identity.preview_allowed(target,websocket.cookies) or websocket.headers.get('origin')!=f'http://127.0.0.1:{port}'))):
