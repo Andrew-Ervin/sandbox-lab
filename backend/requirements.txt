@@ -6,3 +6,4 @@ python-dotenv
 PyYAML
 
 PyJWT[crypto]>=2.10.1,<3
+Pillow==12.3.0

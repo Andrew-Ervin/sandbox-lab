@@ -38,3 +38,44 @@ async def test_editor_constructed_asset_uri_and_platform_query(tmp_path,monkeypa
         r=await client.get(path);assert r.status_code==200 and r.json()['name']=='theme'
         assert (await client.get(path+'&url=https://evil.example')).status_code==403
         assert (await client.get('/vscode/assets/remote/'+'0'*64+'/Microsoft.VisualStudio.Code.Manifest')).status_code==404
+
+@pytest.mark.asyncio
+async def test_readme_images_are_rasterized_and_redirects_stay_scoped():
+    import io
+    from PIL import Image
+    from sandbox.marketplace_images import embed,allowed
+    out=io.BytesIO();Image.new('RGB',(2,2),'red').save(out,format='PNG')
+    seen=[]
+    def handle(request):
+        seen.append(str(request.url))
+        if request.url.host=='github.com':return httpx.Response(302,headers={'location':'https://raw.githubusercontent.com/vendor/theme/main/hero.png'})
+        return httpx.Response(200,content=out.getvalue())
+    source=b'![Hero](https://github.com/vendor/theme/raw/main/hero.png) [Link](https://example.com/page)'
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        result=await embed(source,client)
+    assert b'data:image/png;base64,' in result and b'https://example.com/page' in result
+    assert len(seen)==2
+    for url in ['https://127.0.0.1/a.png','https://github.com/owner/repo/issues/a.png','https://raw.githubusercontent.com/a/b/c.svg','https://raw.githubusercontent.com/a/b/c.png?secret=x']:
+        assert not allowed(url)
+    def denied(request):return httpx.Response(302,headers={'location':'http://127.0.0.1/private.png'})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(denied)) as client:
+        assert await embed(source,client)==source
+
+@pytest.mark.asyncio
+async def test_browser_icon_route_requires_owner_and_rejects_other_assets(monkeypatch):
+    import time
+    from backend import preview
+    from sandbox import editor_gallery
+    from fastapi.responses import Response
+    monkeypatch.setattr(preview.identity,'enabled',False)
+    monkeypatch.setitem(preview.targets,61234,{'kind':'ide','expires':time.time()+60})
+    calls=[]
+    async def asset(identity,path):calls.append((identity,path));return Response(b'\x89PNG\r\n\x1a\n',media_type='application/octet-stream')
+    monkeypatch.setattr(editor_gallery,'asset',asset)
+    path='/__lab/marketplace-icons/remote/'+'a'*64+'/Microsoft.VisualStudio.Services.Icons.Default'
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=preview.app),base_url='http://127.0.0.1:61234') as client:
+        assert (await client.get(path+'?targetPlatform=universal')).status_code==200
+        assert (await client.get(path.replace('Icons.Default','VSIXPackage'))).status_code==404
+        monkeypatch.setattr(preview.identity,'enabled',True)
+        assert (await client.get(path)).status_code==404
+    assert len(calls)==1

@@ -68,6 +68,16 @@ async def preview(path:str,request:Request):
         # assets; workspace files and arbitrary external hosts remain excluded.
         virtual_files='https://*.vscode-resource.vscode-cdn.net/home/sandbox/.local/share/code-server/extensions/'
         common['Content-Security-Policy']=f"default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: {virtual_files}; style-src 'self' 'unsafe-inline' {virtual_files}; img-src 'self' data: blob: {virtual_files}; font-src 'self' data: {virtual_files}; connect-src 'self' ws://127.0.0.1:{port} {virtual_files}; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; frame-ancestors 'self' http://127.0.0.1:3000 http://localhost:3000"
+    if target['kind']=='ide' and path.startswith('__lab/marketplace-icons/'):
+        # The browser may retrieve catalog icons only, never packages or arbitrary URLs.
+        import re
+        asset_path=path.removeprefix('__lab/marketplace-icons/')
+        if request.method not in ('GET','HEAD') or not re.fullmatch(r'(?:remote/[a-f0-9]{64}|[A-Za-z0-9_.-]+)/Microsoft\.VisualStudio\.Services\.Icons\.Default',asset_path):raise HTTPException(404)
+        from sandbox.editor_gallery import asset
+        result=await asset(*asset_path.split('/',1))
+        media_type='image/png' if result.body.startswith(b'\x89PNG\r\n\x1a\n') else result.media_type
+        if not media_type or not media_type.startswith('image/'):raise HTTPException(404)
+        return Response(result.body,media_type=media_type,headers={'Cache-Control':'private, max-age=3600','X-Content-Type-Options':'nosniff','Content-Security-Policy':"sandbox; default-src 'none'"})
     if target['kind']=='ide' and path=='__lab/editor-activity':
         if request.method!='POST' or request.headers.get('origin')!=f'http://127.0.0.1:{port}':raise HTTPException(403)
         from .azure_runtime import runtime
@@ -149,6 +159,7 @@ async def preview(path:str,request:Request):
         from sandbox.editor_preferences import LAYOUT_KEYS
         profile=runtime().editor_profiles.get(target.get('owner',''))['profile'] or {}
         code=(ROOT/'sandbox/editor_layout.js').read_text().replace('__LAB_PROFILE__',__import__('json').dumps(profile.get('layout',{})).replace('<','\\u003c')).replace('__LAB_KEYS__',__import__('json').dumps(sorted(LAYOUT_KEYS)))
+        code += '\n' + (ROOT/'sandbox/editor_marketplace_images.js').read_text()
         body=body.replace(b'<head>',b'<head><script>'+code.encode()+b'</script>',1)
     if target['kind']=='app':
         from .preview_assets import rewrite

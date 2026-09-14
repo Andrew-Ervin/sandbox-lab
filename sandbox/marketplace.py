@@ -92,6 +92,7 @@ async def query(body,base,pinned):
 
 async def asset(token):
     if not enabled() or not re.fullmatch(r'[a-f0-9]{64}(?:/[A-Za-z0-9.]{1,120})?',token):raise HTTPException(404)
+    asset_type=token.rsplit('/',1)[-1]
     db=database()
     try:
         if '/' in token:
@@ -104,4 +105,7 @@ async def asset(token):
     if not old_enough(row[1]):raise HTTPException(403,'Extension release is younger than five days')
     async with slots,httpx.AsyncClient(timeout=120,trust_env=False,follow_redirects=False) as client:
         data,kind=await read(client,row[0],100_000_000)
+        if asset_type in ('Microsoft.VisualStudio.Services.Content.Details','Microsoft.VisualStudio.Services.Content.Changelog'):
+            from .marketplace_images import embed
+            data=await embed(data,client)
     return Response(data,media_type=kind,headers={'Cache-Control':'private, max-age=3600','X-Content-Type-Options':'nosniff'})
