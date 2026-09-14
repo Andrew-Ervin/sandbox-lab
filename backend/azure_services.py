@@ -60,7 +60,7 @@ async def serve(runtime, record, ready=None):
             model_client = await stack.enter_async_context(httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway.app), base_url='http://models', timeout=240))
         url = record['bridge_url'].replace('https://','wss://')+'/services'
         async with connect(url, additional_headers={'Authorization':'Bearer '+record['bridge_token']}, proxy=None,
-                           max_size=3_000_000, max_queue=8, compression=None) as connection:
+                           max_size=20_000_000, max_queue=8, compression=None) as connection:
             acknowledgement = json.loads(await asyncio.wait_for(connection.recv(), 15))
             if acknowledgement != {'type': 'ready'}: raise RuntimeError('Sandbox service connection was not accepted')
             if ready:ready.set()
@@ -86,9 +86,9 @@ async def serve(runtime, record, ready=None):
                             else:response = await package_client.request(request['method'],path)
                             if response.status_code>=400:runtime.telemetry.event('package',record['id'],'package_request_failed',error=f'Package gateway HTTP {response.status_code}')
                         elif request['service'] == 'model' and model_client:
-                            if (request['method'],path) not in (('POST','/v1/chat/completions'),('POST','/v1/responses'),('POST','/v1/messages'),('GET','/v1/models'),('GET','/v1/usage')): raise ValueError('Model route denied')
+                            if (request['method'],path) not in (('POST','/v1/audio/transcriptions'),('POST','/v1/chat/completions'),('POST','/v1/responses'),('POST','/v1/messages'),('GET','/v1/models'),('GET','/v1/usage')): raise ValueError('Model route denied')
                             raw = base64.b64decode(request['body'], validate=True)
-                            if len(raw)>2_000_000: raise ValueError('Model request too large')
+                            if len(raw)>(13_334_360 if path=='/v1/audio/transcriptions' else 2_000_000): raise ValueError('Model request too large')
                             # The existing gateway validates expiry/signature. Also
                             # bind this reverse connection to exactly its workspace.
                             from starlette.requests import Request
@@ -111,6 +111,14 @@ async def serve(runtime, record, ready=None):
                             model_active=True
                             from .previews import previews
                             previews.renew_workspace(record['id'])
+                            if path=='/v1/audio/transcriptions':
+                                audio=json.loads(raw)
+                                gateway.prepare_transcription(audio)
+                                # The dedicated gateway performs endpoint privacy checks
+                                # before sending audio. Do not route it through chat.
+                                response=await model_client.post(path,json=audio,headers={'Authorization':authorization})
+                                await send({'type':'headers','status':response.status_code,'content_type':'application/json'})
+                                await send({'type':'body','data':base64.b64encode(response.content).decode()});await send({'type':'end'});return
                             protocol = path.rsplit('/', 1)[-1]
                             body = gateway.prepare_body(json.loads(raw),auth) if protocol == 'completions' else gateway.prepare_native(json.loads(raw), protocol,auth)
                             charge = runtime.budget.reserve('model',model_reservation(runtime,body,auth.get('catalog')))

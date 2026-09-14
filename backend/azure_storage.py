@@ -66,10 +66,13 @@ class AzureStorage:
                 self.db.execute('COMMIT')
             except BaseException:
                 self.db.execute('ROLLBACK'); raise
-            # Failed/ambiguous writes keep the old ETag. A subsequent conditional
-            # write fails safely, preserving both remote versions for review.
-            result = await self.runtime.transport.call('blob_put','lab-quick',args={
-                'key':key, 'data':base64.b64encode(raw).decode(), 'etag':previous.get('etag')})
+            try:
+                result = await self.runtime.transport.call('blob_put','lab-quick',args={
+                    'key':key, 'data':base64.b64encode(raw).decode(), 'etag':previous.get('etag')})
+            except BaseException:
+                # Observe the latest remote ETag before a later, explicit save.
+                # Never replay an ambiguous write automatically.
+                self.index.pop(key,None);self.flush();raise
             self.index[key] = {'etag':result['etag'],'sha256':digest,'bytes':len(raw),'saved_at':time.time()}
             self.flush()
 

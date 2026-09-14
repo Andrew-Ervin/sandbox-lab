@@ -57,8 +57,7 @@ def snapshot():
 def resolve(version):
     value=_versions.get(version)
     if value and value[0]>time.time():return value[1]
-    current=snapshot()
-    return current[1] if current and current[0]==version else None
+    return None
 
 def metadata():return list(_catalog.values())
 def price(model,version=None):

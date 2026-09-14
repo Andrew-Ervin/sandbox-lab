@@ -9,10 +9,11 @@ class Storage:
     def __init__(self):self.data={}
     async def save(self,kind,key,payload):self.data[key]=payload
     async def load(self,kind,key):return self.data.get(key)
+    async def delete(self,kind,key):self.data.pop(key,None)
 
 @pytest.mark.asyncio
 async def test_archive_verifies_roundtrip_and_rejects_corrupt_chunk(tmp_path):
-    storage=Storage();archive=AzureArchive(SimpleNamespace(storage=storage))
+    storage=Storage();archive=AzureArchive(SimpleNamespace(storage=storage,root=tmp_path))
     source=tmp_path/'source.tgz';source.write_bytes(b'private-test-file'*100)
     key=await archive.upload('workspace',source)
     output=tmp_path/'restored.tgz';await archive.download('workspace',key,output)
@@ -68,3 +69,24 @@ async def test_archive_delete_partial_failure_retains_manifest_for_retry(tmp_pat
     await archive.delete(record)
     assert 'cold_archive' not in record
     assert storage.delete.call_args.args==('workspaces','home:w:v:manifest')
+
+@pytest.mark.asyncio
+async def test_failed_upload_reclaims_partially_written_blobs(tmp_path):
+    storage=Storage();original=storage.save
+    async def fail(kind,key,payload):
+        await original(kind,key,payload)
+        raise RuntimeError('ambiguous write')
+    storage.save=fail
+    archive=AzureArchive(SimpleNamespace(root=tmp_path,storage=storage))
+    source=tmp_path/'source';source.write_bytes(b'data')
+    with pytest.raises(RuntimeError):await archive.upload('w',source)
+    assert storage.data=={} and not list((tmp_path/'archive-uploads').glob('*.json'))
+
+@pytest.mark.asyncio
+async def test_archive_delete_disabled_storage_keeps_recovery_reference(tmp_path):
+    from unittest.mock import Mock
+    storage=Storage();storage.enabled=False
+    record={'id':'w','cold_archive':'saved'}
+    archive=AzureArchive(SimpleNamespace(root=tmp_path,storage=storage,save=Mock()))
+    with pytest.raises(RuntimeError):await archive.delete(record)
+    assert record['cold_archive']=='saved'

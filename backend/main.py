@@ -356,7 +356,16 @@ async def developer_start(request: Request):
     data=await request.json()
     try:
         workspace=await developer.start(data.get('name','New workspace'),owner=request.state.owner,compute_size=data.get('compute_size','light'))
-        project=store.link_developer(workspace['id'],request.state.owner,workspace['name'])
+        try:project=store.link_developer(workspace['id'],request.state.owner,workspace['name'])
+        except Exception:
+            # Keep the owner-scoped workspace record discoverable, but stop
+            # paid compute when project linking fails. Never delete saved work.
+            task=developer.tasks.get(workspace['id'])
+            if task and not task.done():task.cancel();await asyncio.gather(task,return_exceptions=True)
+            try:await developer.runtime.stop(workspace['id'])
+            except Exception:
+                developer.runtime.telemetry.event('developer',workspace['id'],'project_link_cleanup_failed',error='Workspace linking failed; stop needs retry')
+            raise
         workspace.update(project_id=project['id'],project_name=project['name'])
         response=JSONResponse(workspace)
         return response

@@ -86,7 +86,7 @@ class Bridge:
                 if 'transfer-encoding' in fields: raise ValueError('Chunked requests unavailable')
                 if not path.startswith('/') or path.startswith('//') or len(path) > 4096: raise ValueError('Invalid path')
                 gallery_query=service=='package' and method=='POST' and path=='/vscode/gallery/extensionquery'
-                maximum = 2_000_000 if service == 'model' else (16000 if gallery_query else 0)
+                maximum = (13_334_360 if path == '/v1/audio/transcriptions' else 2_000_000) if service == 'model' else (16000 if gallery_query else 0)
                 length = int(fields.get('content-length', '0'))
                 if not 0 <= length <= maximum: raise ValueError('Body too large')
                 if service=='model':
@@ -94,7 +94,7 @@ class Bridge:
                     parsed=urlsplit(path);query=parse_qs(parsed.query)
                     if parsed.path=='/v1/messages' and all(k=='beta' and v==['true'] for k,v in query.items()):path=parsed.path
                     elif parsed.path=='/v1/models' and all(k=='client_version' and len(v)==1 and len(v[0])<40 for k,v in query.items()):path=parsed.path
-                    if (method,path) not in (('POST','/v1/chat/completions'),('POST','/v1/responses'),('POST','/v1/messages'),('GET','/v1/models'),('GET','/v1/usage')):raise ValueError('Route denied')
+                    if (method,path) not in (('POST','/v1/audio/transcriptions'),('POST','/v1/chat/completions'),('POST','/v1/responses'),('POST','/v1/messages'),('GET','/v1/models'),('GET','/v1/usage')):raise ValueError('Route denied')
                 elif method!='GET' and not gallery_query and not (method=='HEAD' and re.fullmatch(r'/artifact/[a-f0-9]{64}(?:/[^/?]+)?',path)):raise ValueError('Method denied')
                 if not self.reverse: raise RuntimeError('Broker disconnected')
                 body = await reader.readexactly(length)
@@ -130,7 +130,7 @@ class Bridge:
 
     async def run(self):
         async with serve(self.socket, '0.0.0.0', 18443, process_request=self.authenticate,
-                         max_size=3_000_000, max_queue=8, compression=None, ping_interval=20):
+                         max_size=20_000_000, max_queue=8, compression=None, ping_interval=20):
             servers = [await asyncio.start_server(lambda r,w: self.http(r,w,'package'), '127.0.0.1', 3128, limit=16000)]
             if self.developer:
                 servers.append(await asyncio.start_server(lambda r,w: self.http(r,w,'model'), '127.0.0.1', 8080, limit=16000))

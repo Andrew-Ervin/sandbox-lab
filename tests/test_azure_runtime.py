@@ -341,3 +341,23 @@ async def test_command_result_rate_limit_retries_read_without_relaunch(control,m
  control.root_exec.assert_awaited_once()
  assert control.transport.read.await_count==3
  assert [c.args[0] for c in sleep.await_args_list]==[.4,5]
+
+@pytest.mark.asyncio
+async def test_resize_blocks_commands_during_start_and_releases_after_failure(control):
+ record={'id':'resize-race','kind':'developer','name':'race','state':'stopped','compute_size':'light','sandbox_id':'sid'}
+ control.save(record)
+ async def start(wid):
+  assert wid in control.resizing
+  with pytest.raises(RuntimeError,match='changing'):
+   await control.execute(wid,['echo','cannot run'])
+  raise RuntimeError('start failed')
+ control.start=start
+ with pytest.raises(RuntimeError,match='start failed'):await control.resize(record['id'],'balanced')
+ assert record['id'] not in control.resizing
+
+@pytest.mark.asyncio
+async def test_malformed_completed_result_still_cleans_operation(control):
+ record={'id':'bad-result','kind':'quick','name':'bad','state':'running','lease_until':time.time()+60,'sandbox_id':'sid'}
+ control.save(record);control.root_exec=AsyncMock();control.transport.read=AsyncMock(return_value=b'not json');control.transport.call=AsyncMock()
+ with pytest.raises(ValueError):await control._execute(record['id'],['echo','hi'])
+ assert control.transport.call.await_count==2

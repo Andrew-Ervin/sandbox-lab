@@ -28,23 +28,49 @@ class AzureArchive:
         record=next((r for r in self.runtime.records() if self.eligible(r)),None)
         if record:self.task=asyncio.create_task(self.archive(record['id']))
 
+    async def reconcile_uploads(self,wid):
+        root=self.runtime.root/'archive-uploads'
+        if not root.exists():return
+        record=self.runtime.record(wid) if hasattr(self.runtime,'record') else {}
+        for path in root.glob(wid+'-*.json'):
+            journal=json.loads(path.read_text())
+            if journal['manifest'] not in (record.get('cold_archive'),record.get('previous_cold_archive')):
+                for key in journal['keys']:
+                    if not key.startswith(journal['prefix']):raise RuntimeError('Invalid archive journal')
+                    await self.runtime.storage.delete('workspaces',key)
+            path.unlink(missing_ok=True)
+
     async def upload(self,wid,path):
         size=path.stat().st_size
         if not 0<size<=MAX_BYTES:raise RuntimeError('Home exceeds the cold archive limit; original retained')
+        await self.reconcile_uploads(wid)
         version=uuid.uuid4().hex;chunks=[];digest=hashlib.sha256()
-        with path.open('rb') as source:
-            while data:=source.read(CHUNK):
-                digest.update(data);key=f'home:{wid}:{version}:{len(chunks)}'
-                await self.runtime.storage.save('workspaces',key,{'data':base64.b64encode(data).decode()})
-                chunks.append({'key':key,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()})
-        manifest={'version':1,'workspace':wid,'bytes':size,'sha256':digest.hexdigest(),'chunks':chunks,'created_at':time.time()}
-        key=f'home:{wid}:{version}:manifest'
-        await self.runtime.storage.save('workspaces',key,manifest)
-        # Read every byte back using conditional Blob reads before deleting compute.
-        verify=path.with_suffix('.verify')
-        try:await self.download(wid,key,verify)
-        finally:verify.unlink(missing_ok=True)
-        return key
+        root=self.runtime.root/'archive-uploads';root.mkdir(exist_ok=True,mode=0o700)
+        journal_path=root/(wid+'-'+version+'.json')
+        prefix=f'home:{wid}:{version}:';key=prefix+'manifest'
+        journal={'prefix':prefix,'manifest':key,'keys':[]}
+        def remember(blob):
+            journal['keys'].append(blob)
+            temporary=journal_path.with_suffix('.tmp')
+            temporary.write_text(json.dumps(journal));temporary.chmod(0o600);temporary.replace(journal_path)
+        try:
+            with path.open('rb') as source:
+                while data:=source.read(CHUNK):
+                    digest.update(data);part=prefix+str(len(chunks));remember(part)
+                    await self.runtime.storage.save('workspaces',part,{'data':base64.b64encode(data).decode()})
+                    chunks.append({'key':part,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()})
+            manifest={'version':1,'workspace':wid,'bytes':size,'sha256':digest.hexdigest(),'chunks':chunks,'created_at':time.time()}
+            remember(key)
+            await self.runtime.storage.save('workspaces',key,manifest)
+            verify=path.with_suffix('.verify')
+            try:await self.download(wid,key,verify)
+            finally:verify.unlink(missing_ok=True)
+            # Keep the journal until the owning record durably references this archive.
+            return key
+        except BaseException:
+            try:await self.reconcile_uploads(wid)
+            except Exception:pass  # Durable journal makes cleanup retryable.
+            raise
 
     async def download(self,wid,key,path):
         manifest=await self.runtime.storage.load('workspaces',key)
@@ -74,6 +100,9 @@ class AzureArchive:
         record['home_restore']=str(local);self.runtime.save(record)
 
     async def delete(self,record):
+        if not self.runtime.storage.enabled and any(record.get(f) for f in ('cold_archive','previous_cold_archive')):
+            raise RuntimeError('Cloud storage is unavailable for archive deletion')
+        await self.reconcile_uploads(record['id'])
         # Delete chunks before the manifest so a partial failure is retryable.
         for field in ('cold_archive','previous_cold_archive'):
             key=record.get(field)
@@ -88,6 +117,10 @@ class AzureArchive:
                 await self.runtime.storage.delete('workspaces',key)
             record.pop(field,None);self.runtime.save(record)
         root=(self.runtime.root/'home-transfers').resolve()
+        for old in list(record.get('archive_backup_history',[])):
+            path=Path(old)
+            if path.parent.resolve()!=root or not path.name.startswith(record['id']+'-'):raise RuntimeError('Unsafe local archive path')
+            path.unlink(missing_ok=True);record['archive_backup_history'].remove(old);self.runtime.save(record)
         for field in ('archive_backup','home_restore','home_transfer_backup'):
             value=record.get(field)
             if not value:continue
@@ -121,7 +154,7 @@ for p in Path('/proc').iterdir():
                 return
             if remote['state'] not in ('Stopped','Suspended'):return
             last=record.get('last_activity_at',record['updated_at'])
-            runtime.resizing.add(wid);frozen=False
+            runtime.resizing.add(wid);frozen=False;local=None
             try:
                 await runtime._start(record)
                 record=runtime.record(wid)
@@ -131,12 +164,16 @@ for p in Path('/proc').iterdir():
                 local=root/(wid+'-'+uuid.uuid4().hex+'.tgz')
                 await runtime.export_home(wid,local,'/tmp/lab-home-'+uuid.uuid4().hex+'.parts',require_complete=True)
                 key=await self.upload(wid,local)
+                record=runtime.record(wid)
+                old_backup=record.get('archive_backup')
+                # Commit verified recovery state before stop or delete can fail.
+                record.update(cold_archive=key,archive_backup=str(local),last_activity_at=last)
+                if old_backup and old_backup!=str(local):record.setdefault('archive_backup_history',[]).append(old_backup)
+                runtime.save(record)
+                await self.reconcile_uploads(wid)
                 await runtime._stop(wid,skip_checkpoint=True)
                 frozen=False
                 record=runtime.record(wid)
-                # Persist recovery information before the potentially ambiguous delete.
-                record.update(cold_archive=key,archive_backup=str(local),last_activity_at=last)
-                runtime.save(record)
                 await runtime.transport.call('delete',runtime.profile(record['kind'])['group'],record['sandbox_id'])
                 record.setdefault('previous_sandboxes',[]).append(record['sandbox_id'])
                 record.update(sandbox_id=None,create_submitted=False,prepared=False,state='stopped',archived_at=time.time(),archive_frozen=False)
@@ -151,7 +188,10 @@ for p in Path('/proc').iterdir():
                 record=runtime.record(wid);record.update(archive_retry_at=time.time()+86400,last_activity_at=last,storage_error='Cold archive needs attention; recovery state retained')
                 runtime.save(record);runtime.telemetry.event(record['kind'],wid,'home_archive_failed',error=str(error))
                 if isinstance(error,asyncio.CancelledError):raise
-            finally:runtime.resizing.discard(wid)
+            finally:
+                try:
+                    if local and str(local)!=runtime.record(wid).get('archive_backup'):local.unlink(missing_ok=True)
+                finally:runtime.resizing.discard(wid)
 
     async def close(self):
         # Let an in-flight bounded archival operation reach a safe state before shutdown.

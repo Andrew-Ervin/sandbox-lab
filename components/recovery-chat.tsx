@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { artifactLinks, consumeEvents, itemText, messageRequest } from '@/lib/recovery-chat';
+import { artifactLinks, consumeEvents, itemText, messageRequest, mergeLatestItems, prependOlderItems } from '@/lib/recovery-chat';
 
 export function RecoveryChat({ thread, sessionFetch, onThread, onRefresh, onFullView }: {
   thread: string | null; sessionFetch: typeof fetch; onThread: (id: string) => void;
@@ -21,9 +21,12 @@ export function RecoveryChat({ thread, sessionFetch, onThread, onRefresh, onFull
     const response = await sessionFetch('/api/chatkit', { method: 'POST', signal: AbortSignal.timeout(12000), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({type:'threads.get_by_id',params:{thread_id:id}}) });
     if (!response.ok) throw Error(`Conversation could not load (${response.status}).`);
     const data: any = await response.json();
+    const page = await sessionFetch('/api/chatkit', {method:'POST',signal:AbortSignal.timeout(12000),headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'items.list',params:{thread_id:id,order:'desc',limit:100}})});
+    if(!page.ok)throw Error('Conversation messages could not load.');
+    data.items=await page.json();
     if (generation.current === version && selected.current === id) {
       setReadError('');
-      setItemsThread(id);setItems(current=>{const latest=data.items?.data || [];const ids=new Set(latest.map((i:any)=>i.id));return [...current.filter(i=>!ids.has(i.id)),...latest];});if(firstPage.current){setHasMore(Boolean(data.items?.has_more));firstPage.current=false;} setLocked(data.status?.type === 'locked');
+      setItemsThread(id);setItems(current=>mergeLatestItems(current,data.items?.data || []));if(firstPage.current){setHasMore(Boolean(data.items?.has_more));firstPage.current=false;} setLocked(data.status?.type === 'locked');
     }
   };
   useEffect(() => {
@@ -46,7 +49,7 @@ export function RecoveryChat({ thread, sessionFetch, onThread, onRefresh, onFull
       const response=await sessionFetch('/api/chatkit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'items.list',params:{thread_id:id,after:items[0].id,order:'desc',limit:100}})});
       if(!response.ok)throw Error('Earlier messages could not load.');
       const data: any=await response.json();
-      if(generation.current===version){setItems(current=>[...data.data.reverse(),...current]);setHasMore(data.has_more);}
+      if(generation.current===version){setItems(current=>prependOlderItems(current,data.data));setHasMore(data.has_more);}
     }catch(e){setError((e as Error).message);}
   };
   const send = async () => {

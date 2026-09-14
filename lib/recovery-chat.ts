@@ -13,6 +13,7 @@ export async function consumeEvents(response: Response, receive: (event: any) =>
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
+      if (buffer.length > 2_000_000) throw Error('Chat event exceeds the recovery limit. Reopen history.');
       const frames = buffer.replace(/\r\n/g, '\n').split('\n\n');
       buffer = frames.pop() || '';
       for (const frame of frames) {
@@ -50,4 +51,13 @@ export function artifactLinks(text: string): {name:string;url:string}[] {
     }catch{}
   }
   return links;
+}
+
+export function mergeLatestItems(current: any[], descending: any[]): any[] {
+  const latest=[...descending].reverse(), ids=new Set(latest.map(i=>i.id));
+  return [...current.filter(i=>!ids.has(i.id)),...latest];
+}
+export function prependOlderItems(current: any[], descending: any[]): any[] {
+  const ids=new Set(current.map(i=>i.id));
+  return [...[...descending].reverse().filter(i=>!ids.has(i.id)),...current];
 }

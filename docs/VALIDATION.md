@@ -83,3 +83,15 @@ unknown/duplicate query rejection, and real asset URI routing. Native model gate
 tests verify operator-owned search limits and disable behavior. Usage ledger tests
 combine headless and developer requests while preserving owner isolation. Editor
 opening now waits for its existing harness configuration task before returning.
+
+Review follow-up tests cover resize admission before startup, expired unchanged model
+catalogs, malformed completed-command cleanup, and orphan-file reconciliation. The
+supervisor reclaims operation files older than one hour on subsequent launches, using
+an exclusive nonblocking lock to preserve a still-running supervisor. This also recovers
+files after a broker timeout or restart; it never replays the command.
+
+The review also covers failed Blob-write cache invalidation, journaled partial archive
+upload cleanup, recovery-state persistence before shutdown, and retained local backup
+tracking. Recovery chat explicitly loads the latest descending page and presents it
+chronologically, deduplicates older pages, and rejects oversized complete stream frames.
+Stale chat load callbacks cannot replace the currently requested conversation.

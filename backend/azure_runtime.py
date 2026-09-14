@@ -408,27 +408,32 @@ class AzureRuntime:
             else:
                 await self.transport.write(group, sid, f'/var/lib/lab/requests/{ident}.request',payload.encode())
             await self.root_exec(record, 'python -I -c '+shlex.quote(launcher))
-            async with asyncio.timeout(timeout+45):
-                poll_delay = .4
-                while True:
-                    if not bootstrap and self.record(wid)['state']!='running':
-                        raise RuntimeError('Workspace stopped while this command was running; no further file reads were sent.')
-                    try:
-                        raw = await self.transport.read(group, sid, f'/var/lib/lab/requests/{ident}.result', maximum+200000)
-                        result = json.loads(raw)
-                        break
-                    except AzureError as error:
-                        if error.status_code not in (404, 429): raise
-                        if error.status_code == 429: poll_delay = max(poll_delay, 5)
-                    # Long agents previously generated 150 reads/minute each.
-                    # Retry only observation of this already-launched command.
-                    await asyncio.sleep(poll_delay)
-                    poll_delay = min(5, poll_delay * 1.5)
-            for suffix in ('request','result'):
-                try:
-                    await self.transport.call('remove_file', group, sid, {'path':f'/var/lib/lab/requests/{ident}.{suffix}'})
-                except AzureError as error:
-                    self.telemetry.event(record['kind'], wid, 'command_cleanup_failed', error=str(error))
+            completed = False
+            try:
+                async with asyncio.timeout(timeout+45):
+                    poll_delay = .4
+                    while True:
+                        if not bootstrap and self.record(wid)['state']!='running':
+                            raise RuntimeError('Workspace stopped while this command was running; no further file reads were sent.')
+                        try:
+                            raw = await self.transport.read(group, sid, f'/var/lib/lab/requests/{ident}.result', maximum+200000)
+                            completed = True
+                            result = json.loads(raw)
+                            break
+                        except AzureError as error:
+                            if error.status_code not in (404, 429): raise
+                            if error.status_code == 429: poll_delay = max(poll_delay, 5)
+                        # Long agents previously generated 150 reads/minute each.
+                        # Retry only observation of this already-launched command.
+                        await asyncio.sleep(poll_delay)
+                        poll_delay = min(5, poll_delay * 1.5)
+            finally:
+                if completed:
+                    for suffix in ('request','result'):
+                        try:
+                            await self.transport.call('remove_file', group, sid, {'path':f'/var/lib/lab/requests/{ident}.{suffix}'})
+                        except AzureError as error:
+                            self.telemetry.event(record['kind'], wid, 'command_cleanup_failed', error=str(error))
             return result
 
     async def ensure_services(self, record):
@@ -509,12 +514,12 @@ class AzureRuntime:
         if record['kind']!='developer':raise ValueError('This workspace cannot change size')
         if record.get('compute_size','performance')==size:return await self.get(wid)
         if wid in self.resizing or self.active_commands.get(wid):raise RuntimeError('Wait for the current workspace operation to finish')
-        await self.start(wid)
         self.resizing.add(wid)
         remote='/tmp/lab-home-'+uuid.uuid4().hex+'.parts'
         local=self.root/'home-transfers'/(wid+'-'+uuid.uuid4().hex+'.tgz')
-        local.parent.mkdir(exist_ok=True,mode=0o700)
         try:
+            local.parent.mkdir(exist_ok=True,mode=0o700)
+            await self.start(wid)
             # Snapshot restore cannot change CPU/RAM. Transfer the user's home
             # instead; preserve the original stopped environment as recovery.
             await self.editor_profiles.capture(self.record(wid))
@@ -529,7 +534,10 @@ class AzureRuntime:
                 from .previews import previews
                 await previews.remove_workspace(wid)
                 return await self._start(record)
-        finally:self.resizing.discard(wid)
+        finally:
+            try:
+                if str(local) not in [self.record(wid).get(f) for f in ('home_restore','home_transfer_backup','archive_backup')]:local.unlink(missing_ok=True)
+            finally:self.resizing.discard(wid)
 
     async def export_home(self,wid,local,remote,*,require_complete=False):
         result=await self.execute(wid,['python','-I','-c',(ROOT/'sandbox/home_archive.py').read_text()],stdin=json.dumps({'path':remote}),bootstrap=True,timeout=300)

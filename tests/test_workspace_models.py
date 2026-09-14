@@ -75,3 +75,12 @@ def test_price_change_creates_new_snapshot_without_overwriting_issued_price(monk
     second,_=catalog.snapshot()
     assert first!=second
     assert catalog.price(MODEL,first)['completion']==.0001
+
+def test_expired_catalog_is_not_reissued_by_resolution(monkeypatch):
+    monkeypatch.setattr(catalog,'_versions',{})
+    monkeypatch.setattr(catalog.time,'time',lambda:1000)
+    monkeypatch.setattr(catalog,'_updated',1000)
+    monkeypatch.setattr(catalog,'_catalog',catalog.accept([entry()]))
+    version,_=catalog.snapshot()
+    monkeypatch.setattr(catalog.time,'time',lambda:4601)
+    assert catalog.resolve(version) is None

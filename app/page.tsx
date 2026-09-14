@@ -729,8 +729,9 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
       if (!navigating.current && threadId !== loadedThread.current) setThreadLoading(true);
     },
     onThreadLoadEnd: ({ threadId }) => {
-      loadedThread.current = threadId;
       if (loadCompletion.current?.id === threadId) loadCompletion.current.resolve();
+      if (threadId !== navigation.current.requested) return;
+      loadedThread.current = threadId;
       if (!navigating.current) setThreadLoading(false);
     },
     onThreadChange: ({ threadId }) => {

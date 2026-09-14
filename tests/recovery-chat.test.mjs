@@ -24,3 +24,17 @@ test('artifact links are restricted to authenticated file routes',async()=>{
  assert.deepEqual(artifactLinks('chatkit-link://file-run_abc-2e2e2f736563726574'),[]);
  assert.deepEqual(artifactLinks('https://evil.test/file-run_abc-612e747874'),[]);
 });
+
+test('oversized complete SSE event is rejected before parsing',async()=>{
+ const raw='data: '+JSON.stringify({text:'x'.repeat(2_000_001)})+'\n\n';let delivered=false;
+ await assert.rejects(consumeEvents(new Response(raw),()=>{delivered=true;}),/recovery limit/);
+ assert.equal(delivered,false);
+});
+
+test('descending pages become chronological and older overlap is deduplicated',async()=>{
+ const {mergeLatestItems,prependOlderItems}=await import('../lib/recovery-chat.ts');
+ const current=mergeLatestItems([],[{id:'m4'},{id:'m3'}]);
+ assert.equal(current[0].id,'m3');
+ assert.deepEqual(prependOlderItems(current,[{id:'m3'},{id:'m2'},{id:'m1'}]).map(x=>x.id),['m1','m2','m3','m4']);
+ assert.deepEqual(mergeLatestItems([{id:'m1'},...current],[{id:'m5'},{id:'m4'}]).map(x=>x.id),['m1','m3','m4','m5']);
+});
