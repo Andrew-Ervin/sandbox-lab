@@ -39,3 +39,23 @@ Azure workstations use a brokered Open VSX catalog through their existing packag
 The lightweight Model Costs extension is installed during workstation coding-tool configuration. It aggregates provider-reported usage across your workspaces without carrying an OpenRouter API key. See [cost tracking](MODEL-COST-TRACKER.md) for period boundaries and coverage limits.
 
 Marketplace icons use an authenticated, icon-only route on the editor origin, so the browser never tries to contact the sandbox's loopback broker. README raster images hosted at approved public GitHub raw paths are fetched without credentials, decoded, resized to at most 1920 pixels per side and converted to PNG by the broker, then embedded in the document. Redirect destinations remain allowlisted. Limits: eight references, 2 MB download per image, eight megapixels, 4 MB converted per image and 8 MB total. Arbitrary hosts, SVG README images and oversized media remain blocked; this is not unrestricted extension-document networking.
+
+### Marketplace downloads and search consistency
+
+Marketplace package requests accept the editor's `redirect=true`, `install=true`, and
+validated `targetPlatform` hints. These hints do not select an upstream URL: downloads
+still resolve through the age-checked asset catalog. README images may load from
+GitHub, raw.githubusercontent.com, GitHub image hosts, and jsDelivr under the editor image CSP; this does not grant
+workspace Git write access or general outbound connectivity. Extensions must still
+support the deployed editor version.
+
+The model gateway supplies the operator's bounded `openrouter:web_search` tool to
+Chat Completions, Responses, and Messages requests. The trusted headless coding loop
+uses the same search configuration. Workspace callers cannot override search limits;
+`LAB_ALLOW_WEB_SEARCH=false` disables it. This uses the current server tool rather
+than the deprecated `:online` model suffix. Provider protocol compatibility still
+requires live validation when changing harness or provider versions.
+
+Usage totals are account-scoped across developer workspaces and the broker's headless
+coding loop, starting when accounting was enabled. Provider-reported cost includes
+cache discounts; missing cost remains pending rather than being estimated as zero.

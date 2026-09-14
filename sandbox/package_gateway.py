@@ -5,7 +5,7 @@ import anyio
 from collections.abc import MutableMapping
 from datetime import datetime,timezone
 from pathlib import Path
-from urllib.parse import quote,urlsplit
+from urllib.parse import quote,urlsplit,parse_qsl
 import httpx
 from fastapi import FastAPI,HTTPException,Request
 from fastapi.responses import Response,FileResponse
@@ -112,7 +112,12 @@ def register(url,digest,eco,name,version,published,algorithm='sha256'):
 @app.middleware('http')
 async def readonly(request,call_next):
     gallery_query=request.method=='POST' and request.url.path=='/vscode/gallery/extensionquery'
-    platform_query=request.method in ('GET','HEAD') and request.url.path.startswith('/vscode/assets/') and re.fullmatch(r'targetPlatform=(?:universal|undefined|linux-x64|linux-arm64|linux-armhf|alpine-x64|alpine-arm64|web|darwin-x64|darwin-arm64|win32-x64|win32-arm64|win32-ia32)',request.url.query)
+    parameters=parse_qsl(request.url.query,keep_blank_values=True)
+    platform_query=request.method in ('GET','HEAD') and request.url.path.startswith('/vscode/assets/') and len(parameters)<=3 and len({k for k,v in parameters})==len(parameters) and all(
+        (k=='targetPlatform' and re.fullmatch(r'universal|undefined|linux-x64|linux-arm64|linux-armhf|alpine-x64|alpine-arm64|web|darwin-x64|darwin-arm64|win32-x64|win32-arm64|win32-ia32',v)) or
+        (k in ('redirect','install') and v=='true') for k,v in parameters)
+    # These are editor download hints only. Registry URLs still come exclusively
+    # from the age-checked catalog; no redirect target is accepted from callers.
     if (request.method not in ['GET','HEAD'] and not gallery_query) or (request.url.query and not platform_query) or request.headers.get('authorization') or request.headers.get('cookie'):
         return Response('Only approved package reads are permitted',status_code=403)
     response=await call_next(request);save_catalog();response.headers['X-Content-Type-Options']='nosniff';return response

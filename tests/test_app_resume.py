@@ -98,3 +98,24 @@ def test_local_workspace_lookup_enforces_owner_and_kind(tmp_path):
             adapter.runtime.save({**record,**changes})
             with pytest.raises(ValueError,match='Workspace not found'):adapter.lookup('owned')
     finally:current_owner.reset(token)
+
+@pytest.mark.asyncio
+async def test_editor_waits_for_existing_harness_setup_before_returning():
+    from backend.azure_adapters import AzureDeveloper
+    from unittest.mock import AsyncMock,Mock
+    from backend.activity import background_activity
+    adapter=object.__new__(AzureDeveloper)
+    adapter.runtime=SimpleNamespace(start=AsyncMock(),touch=Mock())
+    adapter.touched={};adapter.configured_until={};adapter.harness={};adapter.tasks={}
+    gate=asyncio.Event()
+    async def setup():
+        await gate.wait();adapter.harness['owned']='Ready'
+    adapter.tasks['owned']=asyncio.create_task(setup())
+    adapter.configure=Mock()
+    token=background_activity.set(True)
+    try:
+        opening=asyncio.create_task(adapter.prepare({'id':'owned','name':'Example'}))
+        await asyncio.sleep(0)
+        assert not opening.done()
+        gate.set();await opening
+    finally:background_activity.reset(token)

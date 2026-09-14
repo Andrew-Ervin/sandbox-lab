@@ -61,7 +61,7 @@ class UsageLedger:
             periods[name]=dict(zip(('requests','priced_requests','cost','input_tokens','cached_tokens','cache_write_tokens','output_tokens'),row))
             periods[name]['pending_requests']=row[0]-row[1]
         first=self.db.execute('SELECT min(at) FROM usage WHERE owner=?',(owner,)).fetchone()[0]
-        return {'periods':periods,'timezone':'UTC','week_starts':'Monday','tracking_since':first,'observed_at':now.timestamp(),'scope':'All workspace coding tools using this broker, for your account. Historical traffic before tracking is not included.'}
+        return {'periods':periods,'timezone':'UTC','week_starts':'Monday','tracking_since':first,'observed_at':now.timestamp(),'scope':'Developer workspace coding tools and broker headless coding, for your account. Historical traffic before tracking is not included.'}
 
 _ledger=None
 def ledger():

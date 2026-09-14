@@ -77,3 +77,9 @@ Collection pages use content-pane container queries for compact layouts, includi
 Authentication regression coverage includes concurrent token refresh, refresh-token rotation, unchanged identity, absolute session lifetime, revocation, and retryable provider outages. Workspace/app transitions must retain the editor iframe rather than merely resume its server afterward. A live backend deployment can still disconnect sockets and should be performed with coding agents idle.
 
 Marketplace media regressions check authenticated icon-only retrieval, package-path rejection, image decoding, and denial of redirects to private or unapproved origins. The supported README image path is bounded GitHub-hosted raster media; unknown external media is intentionally not fetched.
+
+Marketplace regression coverage includes the editor's install/redirect query hints,
+unknown/duplicate query rejection, and real asset URI routing. Native model gateway
+tests verify operator-owned search limits and disable behavior. Usage ledger tests
+combine headless and developer requests while preserving owner isolation. Editor
+opening now waits for its existing harness configuration task before returning.

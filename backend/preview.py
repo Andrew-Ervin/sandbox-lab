@@ -67,7 +67,7 @@ async def preview(path:str,request:Request):
         # literally. Restrict the standard virtual host class to installed editor
         # assets; workspace files and arbitrary external hosts remain excluded.
         virtual_files='https://*.vscode-resource.vscode-cdn.net/home/sandbox/.local/share/code-server/extensions/'
-        common['Content-Security-Policy']=f"default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: {virtual_files}; style-src 'self' 'unsafe-inline' {virtual_files}; img-src 'self' data: blob: {virtual_files}; font-src 'self' data: {virtual_files}; connect-src 'self' ws://127.0.0.1:{port} {virtual_files}; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; frame-ancestors 'self' http://127.0.0.1:3000 http://localhost:3000"
+        common['Content-Security-Policy']=f"default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: {virtual_files}; style-src 'self' 'unsafe-inline' {virtual_files}; img-src 'self' data: blob: https://github.com https://raw.githubusercontent.com https://cdn.jsdelivr.net https://user-images.githubusercontent.com https://private-user-images.githubusercontent.com {virtual_files}; font-src 'self' data: {virtual_files}; connect-src 'self' ws://127.0.0.1:{port} {virtual_files}; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; frame-ancestors 'self' http://127.0.0.1:3000 http://localhost:3000"
     if target['kind']=='ide' and path.startswith('__lab/marketplace-icons/'):
         # The browser may retrieve catalog icons only, never packages or arbitrary URLs.
         import re

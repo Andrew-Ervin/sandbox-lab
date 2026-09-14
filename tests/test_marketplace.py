@@ -36,6 +36,9 @@ async def test_editor_constructed_asset_uri_and_platform_query(tmp_path,monkeypa
     monkeypatch.setattr(package_gateway,'save_catalog',lambda:None)
     async with actual_client(transport=httpx.ASGITransport(app=app),base_url='http://test') as client:
         r=await client.get(path);assert r.status_code==200 and r.json()['name']=='theme'
+        assert (await client.get(path+'&redirect=true&install=true')).status_code==200
+        assert (await client.get(path+'&install=false')).status_code==403
+        assert (await client.get(path+'&targetPlatform=universal')).status_code==403
         assert (await client.get(path+'&url=https://evil.example')).status_code==403
         assert (await client.get('/vscode/assets/remote/'+'0'*64+'/Microsoft.VisualStudio.Code.Manifest')).status_code==404
 

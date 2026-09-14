@@ -25,3 +25,11 @@ def test_calendar_periods_and_owner_isolation(tmp_path):
         l.record(str(i),'a','m','responses',b'{"usage":{"cost":1}}',datetime.fromisoformat(date).replace(tzinfo=timezone.utc).timestamp())
     p=l.summary('a',now)['periods'];assert [p[k]['cost'] for k in ('today','week','month','year')]==[1,1,3,4]
     assert l.summary('b',now)['periods']['year']['cost'] is None
+
+def test_headless_and_developer_usage_accumulate_for_same_owner(tmp_path):
+    l=UsageLedger(tmp_path/'usage.sqlite')
+    for ident,protocol in [('workspace-a','responses'),('workspace-b','messages'),('headless-step','headless')]:
+        l.record(ident,'alice','m',protocol,b'{"usage":{"prompt_tokens":100,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":80},"cost":0.01}}')
+    p=l.summary('alice')['periods']['today']
+    assert p['requests']==3 and p['cached_tokens']==240 and p['cost']==.03
+    assert l.summary('bob')['periods']['today']['requests']==0

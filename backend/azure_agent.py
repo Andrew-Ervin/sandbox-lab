@@ -9,7 +9,7 @@ from .assistant_context import CODE_DELIVERABLES
 from .limits import value
 from .completion_validation import response_problem
 from .azure_services import model_reservation
-from sandbox.model_policy import provider_policy
+from sandbox.model_policy import provider_policy, web_search_tool
 
 INSTRUCTION = (
     'Work in the attached Azure sandbox at /home/sandbox/project. Execute requested work and report actual results. '
@@ -56,6 +56,10 @@ async def run_agent(adapter, thread, prompt, mode, run, store, context, input_fi
                 if sessions and cid in sessions.stops: raise asyncio.CancelledError()
                 body = {'model':MODEL,'messages':messages,'tools':TOOLS,'max_tokens':16000,
                         'reasoning':{'effort':REASONING},'provider':provider_policy()}
+                search = web_search_tool()
+                if search:
+                    body['tools'] = [*TOOLS, search]
+                    body['max_tool_calls'] = search['parameters']['max_uses']
                 reservation = adapter.runtime.budget.reserve('model',model_reservation(adapter.runtime,body))
                 run['summary'] = 'Coding in Azure · planning next step'; store.save_run(run)
                 cost = None
@@ -63,6 +67,11 @@ async def run_agent(adapter, thread, prompt, mode, run, store, context, input_fi
                     response = await client.post('https://openrouter.ai/api/v1/chat/completions',json=body,
                                                  headers={'Authorization':'Bearer '+API_KEY,'X-Title':'Sandbox Lab Azure'})
                     if response.status_code >= 400: raise RuntimeError(f'The coding model returned HTTP {response.status_code}; no pending command was executed.')
+                    try:
+                        from .model_usage import ledger
+                        ledger().record(cid+':'+str(step), context['owner'], MODEL, 'headless', response.content)
+                    except Exception:
+                        adapter.runtime.telemetry.event('model',ws['id'],'usage_record_failed',error='Headless usage accounting unavailable')
                     payload = response.json(); choices = payload.get('choices') or []
                     if not choices: raise RuntimeError('Coding response was incomplete; no pending command was executed.')
                     problem = response_problem(choices[0])

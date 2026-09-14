@@ -150,8 +150,11 @@ class AzureDeveloper(AzureWorkspaces):
             if editor:await self.runtime.editor_profiles.for_open(record)
         if editor and self.configured_until.get(workspace['id'], 0) < time.time():
             self.configure(workspace['id'], workspace['name'])
-            # The editor is already healthy. Harness setup has its own visible
-            # status and must not hold the editor open request behind npm work.
+            # Do not return a fresh editor before its user configuration and
+            # extensions exist: the client otherwise caches an empty profile.
+            await asyncio.shield(self.tasks[workspace['id']])
+            if self.harness.get(workspace['id']) != 'Ready':
+                raise RuntimeError('Coding tools could not initialize. Retry opening the workspace.')
 
     async def ide(self, workspace):
         from .previews import previews

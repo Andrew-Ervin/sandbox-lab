@@ -177,7 +177,7 @@ def prepare_body(body, claims=None):
 
 
 def prepare_native(body, protocol, claims=None):
-    """Allow local harness tools, never upstream URL fetching or server-side tools."""
+    """Allow local harness tools plus operator-configured OpenRouter search."""
     if not isinstance(body, dict):
         raise HTTPException(400, 'Expected a JSON object')
     def check(value):
@@ -199,6 +199,8 @@ def prepare_native(body, protocol, claims=None):
     tools = body.get('tools', [])
     if not isinstance(tools, list) or len(tools) > 128:
         raise HTTPException(400, 'Invalid tools')
+    # Search configuration is supplied by the broker, never by workspace input.
+    tools = [t for t in tools if not (isinstance(t, dict) and t.get('type') == 'openrouter:web_search')]
     for tool in tools:
         if not isinstance(tool, dict): raise HTTPException(400, 'Invalid tool')
         if protocol == 'responses':
@@ -211,6 +213,11 @@ def prepare_native(body, protocol, claims=None):
     selectable=claims is not None
     claims=claims or {'model':model,'models':[model]}
     result.update(model=requested_model(body,claims,selectable=selectable), provider=provider_policy())
+    result['tools'] = list(tools)
+    search = web_search_tool() if allow_search else None
+    if search:
+        result['tools'].append(search)
+        result['max_tool_calls'] = search['parameters']['max_uses']
     if protocol == 'responses':
         result.update(store=False, max_output_tokens=16000,
                       reasoning={'effort': os.getenv('OPENROUTER_REASONING', 'xhigh')})

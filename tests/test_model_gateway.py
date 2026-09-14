@@ -278,3 +278,16 @@ async def test_operator_can_temporarily_disable_zdr_without_client_routing_overr
     assert provider_policy(speech=True) == {'zdr':False,'data_collection':'deny'}
     monkeypatch.setenv('OPENROUTER_REQUIRE_ZDR', 'typo')
     with pytest.raises(ValueError): provider_policy()
+
+@pytest.mark.parametrize('protocol', ['responses','messages'])
+def test_native_search_uses_operator_limits_and_can_be_disabled(gateway,monkeypatch,protocol):
+    field='input' if protocol=='responses' else 'messages'
+    body={field:[{'role':'user','content':'Search current docs'}], 'tools':[{'type':'openrouter:web_search','parameters':{'max_uses':999,'engine':'native'}}]}
+    monkeypatch.setattr(gateway,'allow_search',True)
+    monkeypatch.setenv('LAB_ALLOW_WEB_SEARCH','true')
+    result=gateway.prepare_native(body,protocol)
+    search=result['tools'][-1]
+    assert search['type']=='openrouter:web_search' and search['parameters']['engine']=='exa'
+    assert search['parameters']['max_uses']==2 and result['max_tool_calls']==2
+    monkeypatch.setenv('LAB_ALLOW_WEB_SEARCH','false')
+    assert gateway.prepare_native(body,protocol)['tools']==[]
