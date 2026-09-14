@@ -61,3 +61,13 @@ Projects receive an AI name of 1–4 words from their starting request. Older el
 ## Personal workspaces
 
 Microsoft Entra tenant/object identity scopes project/history ownership and workspace routes. Existing local data migrates only to the configured operator after SQLite backups. Display names (including accepted AI suggestions with spaces) are labels; reopen, sync and resize use immutable workspace IDs. Workspace lists sort by last explicit use, without changing history ordering on selection. Editor preferences are stored per account and merged using per-workspace baselines. Workspace contents and native coding conversations remain separate. See [Identity](IDENTITY.md) and [Scaling](SCALING.md).
+
+## Inactive home archival
+
+With the operator's seven-day archive policy enabled, stopped headless and developer homes move to verified private Blob archives. Opening recreates compute and restores the saved home, while logical identity and history remain. Running processes and scratch state outside the home are not preserved. See [storage policy](SANDBOX-STORAGE.md) for safeguards, capacity limits and failure behavior.
+
+## Quick Python routing
+
+When a built-in session endpoint is configured, quick Python uses one owner/conversation session with 55-minute idle expiry. Bounded saved files survive expiry through local/Blob checkpoints; interpreter variables do not. Missing packages and longer or shell-based work use headless project delegation. Developer workstations remain separate. See [Python sessions](PYTHON-SESSION-COMPARISON.md).
+
+Switching a workstation's Workspace / App preview tabs keeps its editor iframe mounted while loading or showing the app. This preserves the browser-side extension session. Reload preview explicitly reloads the visible frame; closing the page still disconnects it. Retention does not override the sandbox idle policy or make browser-hosted agents durable across page closure.

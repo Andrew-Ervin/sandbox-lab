@@ -84,6 +84,13 @@ def test_client_cannot_weaken_privacy_or_enable_other_search(gateway):
     assert 'tools' not in body
 
 
+def test_capability_can_select_only_an_operator_enabled_workspace_model(gateway):
+    claims={'model':'test/model','models':['test/model','openai/other']}
+    assert gateway.prepare_body({'messages':[{'role':'user','content':'hello'}],'model':'openai/other'},claims)['model']=='openai/other'
+    with pytest.raises(HTTPException,match='not enabled'):
+        gateway.prepare_body({'messages':[{'role':'user','content':'hello'}],'model':'unpriced/model'},claims)
+
+
 def test_old_openai_reasoning_is_omitted_without_losing_tool_or_current_turn_history(gateway):
     gateway.model = 'openai/test-model'
     reasoning = {'reasoning_details': [{'type': 'reasoning.encrypted', 'data': 'opaque'}],
@@ -271,3 +278,16 @@ async def test_operator_can_temporarily_disable_zdr_without_client_routing_overr
     assert provider_policy(speech=True) == {'zdr':False,'data_collection':'deny'}
     monkeypatch.setenv('OPENROUTER_REQUIRE_ZDR', 'typo')
     with pytest.raises(ValueError): provider_policy()
+
+@pytest.mark.parametrize('protocol', ['responses','messages'])
+def test_native_search_uses_operator_limits_and_can_be_disabled(gateway,monkeypatch,protocol):
+    field='input' if protocol=='responses' else 'messages'
+    body={field:[{'role':'user','content':'Search current docs'}], 'tools':[{'type':'openrouter:web_search','parameters':{'max_uses':999,'engine':'native'}}]}
+    monkeypatch.setattr(gateway,'allow_search',True)
+    monkeypatch.setenv('LAB_ALLOW_WEB_SEARCH','true')
+    result=gateway.prepare_native(body,protocol)
+    search=result['tools'][-1]
+    assert search['type']=='openrouter:web_search' and search['parameters']['engine']=='exa'
+    assert search['parameters']['max_uses']==2 and result['max_tool_calls']==2
+    monkeypatch.setenv('LAB_ALLOW_WEB_SEARCH','false')
+    assert gateway.prepare_native(body,protocol)['tools']==[]

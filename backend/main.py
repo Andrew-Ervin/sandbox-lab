@@ -131,7 +131,10 @@ async def local_security(request: Request, call_next):
         return JSONResponse({'detail':'Untrusted origin'}, 403)
     if request.url.path not in ('/api/bootstrap','/api/auth/login','/api/auth/callback'):
         token = request.cookies.get('lab_session', '')
-        entry = identity.session(token)
+        try:
+            entry = await identity.authenticate(token)
+        except HTTPException as exc:
+            return JSONResponse({'detail':exc.detail}, exc.status_code)
         if not entry:
             return JSONResponse({'detail':'Sign in to continue'}, 401)
         if request.method != 'GET' and not secrets.compare_digest(request.headers.get('x-lab-csrf', ''), entry['csrf']):
@@ -149,10 +152,11 @@ async def local_security(request: Request, call_next):
     return response
 @app.post('/api/bootstrap')
 async def bootstrap(request: Request):
+    await identity.authenticate(request.cookies.get('lab_session', ''))
     return identity.bootstrap(request)
 
 @app.get('/api/auth/login')
-async def login(): return identity.login()
+async def login(fresh: bool = False): return identity.login(fresh=fresh)
 
 @app.get('/api/auth/callback')
 async def callback(request:Request): return await identity.callback(request)
@@ -165,13 +169,13 @@ async def logout(request:Request):
 @app.get('/api/status')
 async def status(request: Request):
     infrastructure,live=await asyncio.gather(health.get(compute,headless),live_containers.get())
-    if request.state.owner != identity.admin:
-        live={'pods':[],'workspaces':[], 'observed_at':time.time()}
-        infrastructure={}
     runs=store.runs(request.state.owner,details=False)
     app_runs=store.apps(request.state.owner)
     for run in runs+app_runs:
         run['runtime_status']='static' if run.get('preview_artifact') else runtime(run.get('workspace_id'),None,live,'lab-agents') if run.get('workspace_id') else ('running' if any(p['name']==run.get('pod') for p in live['pods']) else 'released')
+    if request.state.owner != identity.admin:
+        live={'pods':[],'workspaces':[], 'observed_at':time.time(),'unavailable_namespaces':[]}
+        infrastructure={}
     return {'runtime_health':runtime_health_status(),'project_reserve':headless.reserve.status(),'containers':live,'idle_policy':{'project_seconds':idle.project_idle,'developer_seconds':idle.developer_idle,'error':idle.error},**infrastructure, 'openrouter':bool(API_KEY), 'model':MODEL, 'reasoning':REASONING, 'coding_engine':'azure-broker' if azure_enabled() else os.getenv('PROJECT_ENGINE','ori-pi'), 'pool':compute.status(), 'credential_renewal':{'developer_error':developer.renewal_error},'idle_workspaces_stopped':idle.stopped, 'runs':runs,'apps':app_runs,'jobs':[{k:v for k,v in j.items() if k!='owner'} for j in store.jobs(request.state.owner)]}
 @app.get('/api/threads')
 async def threads(request: Request):
@@ -351,8 +355,17 @@ async def rename_workspace(workspace_id:str,request:Request):
 async def developer_start(request: Request):
     data=await request.json()
     try:
-        workspace=await developer.start(data.get('name','New workspace'),owner=request.state.owner,compute_size=data.get('compute_size','balanced'))
-        project=store.link_developer(workspace['id'],request.state.owner,workspace['name'])
+        workspace=await developer.start(data.get('name','New workspace'),owner=request.state.owner,compute_size=data.get('compute_size','light'))
+        try:project=store.link_developer(workspace['id'],request.state.owner,workspace['name'])
+        except Exception:
+            # Keep the owner-scoped workspace record discoverable, but stop
+            # paid compute when project linking fails. Never delete saved work.
+            task=developer.tasks.get(workspace['id'])
+            if task and not task.done():task.cancel();await asyncio.gather(task,return_exceptions=True)
+            try:await developer.runtime.stop(workspace['id'])
+            except Exception:
+                developer.runtime.telemetry.event('developer',workspace['id'],'project_link_cleanup_failed',error='Workspace linking failed; stop needs retry')
+            raise
         workspace.update(project_id=project['id'],project_name=project['name'])
         response=JSONResponse(workspace)
         return response
@@ -440,11 +453,11 @@ async def prewarm_compute():
 
 @app.post('/api/developer/workspaces/{workspace_id}/heartbeat')
 async def developer_heartbeat(workspace_id: str):
-    workspace=next((w for w in await developer.list() if w['id']==workspace_id),None)
-    if not workspace: raise HTTPException(404)
+    try:workspace=developer.lookup(workspace_id)
+    except (ValueError,RuntimeError):raise HTTPException(404) from None
     developer.touched[workspace_id]=time.time()
     developer.runtime.touch(workspace_id)
-    developer.runtime.warm.demand('developer')
+    developer.runtime.warm.demand('developer',developer.runtime.record(workspace_id).get('compute_size'))
     await developer.ide(workspace)
     control=azure_runtime();record=control.record(workspace_id)
     if time.time()-record.get('preferences_checked_at',0)>30:
@@ -458,3 +471,10 @@ async def operations_snapshot(request: Request):
     # Existing middleware authenticates the single local owner. Production requires an admin role.
     from .operations import snapshot
     return await snapshot()
+
+
+@app.get('/api/model-usage')
+async def model_usage_snapshot(request: Request):
+    from .model_usage import ledger,schedule_reconciliation
+    schedule_reconciliation(request.state.owner)
+    return JSONResponse(ledger().summary(request.state.owner),headers={'Cache-Control':'no-store'})

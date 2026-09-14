@@ -19,6 +19,7 @@ export type Run = {
 };
 export type Workspace = {
   last_used_at?: number;
+  suggested_compute?: string | null;
   compute_size?: string;
   suggested_name?: string;
   source_path?: string;

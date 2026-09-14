@@ -1,5 +1,5 @@
 'use client';
-import type { CSSProperties, RefObject } from 'react';
+import { useState, type CSSProperties, type RefObject } from 'react';
 import {
   RefreshCw,
   ExternalLink,
@@ -47,6 +47,12 @@ export function PreviewPanel({
   collapsePreview,
   openPreview,
 }: Props) {
+  // Keep editors mounted while hosted apps load: extension hosts depend on the
+  // browser connection, even when their tab is not visible.
+  const [editors, setEditors] = useState<Preview[]>([]);
+  if (preview.ide && preview.url && !editors.some(item => item.url === preview.url)) {
+    setEditors(items => [...items.filter(item => item.workspace?.id !== preview.workspace?.id), preview]);
+  }
   return (
     <aside
       aria-hidden={!visible}
@@ -118,7 +124,7 @@ export function PreviewPanel({
               </DropdownMenuRadioGroup>
               {!preview.ide && <DropdownMenuCheckboxItem checked={fitPreview} onCheckedChange={setFitPreview}>Fit content to width</DropdownMenuCheckboxItem>}
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => void openPreview(preview.title, preview.endpoint, preview.workspace, preview.ide)}><RefreshCw size={15} />Reload preview</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => { if (previewElement.current && preview.url) previewElement.current.src = preview.url; else void openPreview(preview.title, preview.endpoint, preview.workspace, preview.ide); }}><RefreshCw size={15} />Reload preview</DropdownMenuItem>
               {preview.url && <DropdownMenuItem render={<a href={preview.url} target="_blank" rel="noreferrer" />}><ExternalLink size={15} />Open in new tab</DropdownMenuItem>}
             </DropdownMenuContent>
           </DropdownMenu>
@@ -132,6 +138,16 @@ export function PreviewPanel({
           </Button>
         </div>
       </div>
+      {editors.map(item => <iframe
+        key={item.url}
+        ref={preview.ide && preview.url === item.url ? previewElement : undefined}
+        style={{display: preview.ide && preview.url === item.url ? undefined : 'none'}}
+        title={item.title}
+        src={item.url}
+        sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-modals allow-pointer-lock"
+        allow="clipboard-read; clipboard-write; microphone"
+        referrerPolicy="no-referrer"
+      />)}
       {preview.error ? (
         <div className="preview-message" role="alert">
           {preview.error}
@@ -140,7 +156,7 @@ export function PreviewPanel({
             when needed.
           </p>
         </div>
-      ) : preview.url ? (
+      ) : preview.url ? (preview.ide ? null : (
         <iframe
           onLoad={syncPreviewFit}
           ref={previewElement}
@@ -159,7 +175,7 @@ export function PreviewPanel({
           }
           referrerPolicy={preview.ide ? 'no-referrer' : 'strict-origin-when-cross-origin'}
         />
-      ) : (
+      )) : (
         <div className="preview-message">
           <LoaderCircle className="spin" /> Opening preview…
         </div>

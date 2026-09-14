@@ -5,7 +5,7 @@ import anyio
 from collections.abc import MutableMapping
 from datetime import datetime,timezone
 from pathlib import Path
-from urllib.parse import quote,urlsplit
+from urllib.parse import quote,urlsplit,parse_qsl
 import httpx
 from fastapi import FastAPI,HTTPException,Request
 from fastapi.responses import Response,FileResponse
@@ -112,7 +112,13 @@ def register(url,digest,eco,name,version,published,algorithm='sha256'):
 @app.middleware('http')
 async def readonly(request,call_next):
     gallery_query=request.method=='POST' and request.url.path=='/vscode/gallery/extensionquery'
-    if (request.method not in ['GET','HEAD'] and not gallery_query) or request.url.query or request.headers.get('authorization') or request.headers.get('cookie'):
+    parameters=parse_qsl(request.url.query,keep_blank_values=True)
+    platform_query=request.method in ('GET','HEAD') and request.url.path.startswith('/vscode/assets/') and len(parameters)<=3 and len({k for k,v in parameters})==len(parameters) and all(
+        (k=='targetPlatform' and re.fullmatch(r'universal|undefined|linux-x64|linux-arm64|linux-armhf|alpine-x64|alpine-arm64|web|darwin-x64|darwin-arm64|win32-x64|win32-arm64|win32-ia32',v)) or
+        (k in ('redirect','install') and v=='true') for k,v in parameters)
+    # These are editor download hints only. Registry URLs still come exclusively
+    # from the age-checked catalog; no redirect target is accepted from callers.
+    if (request.method not in ['GET','HEAD'] and not gallery_query) or (request.url.query and not platform_query) or request.headers.get('authorization') or request.headers.get('cookie'):
         return Response('Only approved package reads are permitted',status_code=403)
     response=await call_next(request);save_catalog();response.headers['X-Content-Type-Options']='nosniff';return response
 @app.get('/healthz')
@@ -189,7 +195,7 @@ async def download_artifact(entry,destination):
         raise HTTPException(502,'Package download interrupted; retry the package installation.') from None
 
 
-@app.get('/artifact/{ident}')
+@app.api_route('/artifact/{ident}',methods=['GET','HEAD'])
 async def artifact(ident):
     global reserved_bytes
     entry=downloads.get(ident)
@@ -238,7 +244,7 @@ async def python_simple(name):
             url=register(f['url'],digest,'python',name,version,published)+'/'+quote(f['filename'])
             links.append('<a href="'+html.escape(url)+'#sha256='+digest+'" data-upload-time="'+html.escape(published)+'" data-requires-python="'+html.escape(f.get('requires_python') or '')+'">'+html.escape(f['filename'])+'</a>')
     return Response('<!doctype html><html><body>'+'\n'.join(links)+'</body></html>',media_type='text/html')
-@app.get('/artifact/{ident}/{filename}')
+@app.api_route('/artifact/{ident}/{filename}',methods=['GET','HEAD'])
 async def named_artifact(ident,filename):return await artifact(ident)
 async def npm_data(name):
     if not re.fullmatch(r'(?:@[a-z0-9_.-]+/)?[a-z0-9_.-]{1,160}',name):raise HTTPException(400)

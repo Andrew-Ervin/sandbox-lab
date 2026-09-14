@@ -53,8 +53,15 @@ async def query(request: Request):
         result.append({'extensionId':identity,'extensionName':entry['name'],'displayName':entry['displayName'],'shortDescription':entry['description'],
             'publisher':{'publisherId':str(uuid.uuid5(uuid.NAMESPACE_URL,entry['publisher'])),'publisherName':entry['publisher'],'displayName':entry['publisher'],'flags':'verified'},
             'flags':'validated, public','lastUpdated':entry['published'],'publishedDate':entry['published'],'releaseDate':entry['published'],
-            'versions':[{'version':entry['version'],'targetPlatform':entry['platform'],'lastUpdated':entry['published'],'assetUri':f"{BASE}/assets/{entry['id']}",'files':files,
+            'versions':[{'version':entry['version'],'targetPlatform':entry['platform'],'lastUpdated':entry['published'],'assetUri':f"{BASE}/assets/{entry['id']}",'fallbackAssetUri':f"{BASE}/assets/{entry['id']}",'files':files,
                 'properties':[{'key':'Microsoft.VisualStudio.Code.Engine','value':entry['engine']}]}],'statistics':[],'categories':['AI','Chat']})
+    from sandbox import marketplace
+    if marketplace.enabled():
+        remote=await marketplace.query(body,BASE,{e['id'].lower() for e in entries()})
+        groups=remote.get('results') or []
+        if groups:
+            groups[0]['extensions']=result+groups[0].get('extensions',[])
+        return remote
     total=len(result)
     first=(body.get('filters') or [{}])[0]
     try:
@@ -64,8 +71,12 @@ async def query(request: Request):
     return {'results':[{'extensions':result,'pagingToken':None,'resultMetadata':[{'metadataType':'ResultCount','metadataItems':[{'name':'TotalCount','count':total}]}]}]}
 
 
-@router.get('/vscode/assets/{identity}/{asset}')
+@router.get('/vscode/assets/{identity}/{asset:path}')
 async def asset(identity: str, asset: str):
+    if identity=='remote':
+        from sandbox.marketplace import asset as remote_asset
+        return await remote_asset(asset)
+    asset={'Microsoft.VisualStudio.Services.VSIXPackage':'vsix','Microsoft.VisualStudio.Code.Manifest':'manifest','Microsoft.VisualStudio.Services.Icons.Default':'icon'}.get(asset,asset)
     entry=next((e for e in entries() if e['id']==identity),None)
     if entry is None:raise HTTPException(404,'Extension is not approved in this gallery')
     path=archive(entry)

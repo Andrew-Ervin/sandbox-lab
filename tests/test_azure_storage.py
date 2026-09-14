@@ -14,14 +14,14 @@ def storage(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_conditional_save_keeps_etag_on_conflict(storage):
+async def test_conditional_save_invalidates_etag_on_conflict(storage):
     transport=storage.runtime.transport
     raw=json.dumps({'files':[]}).encode()
     transport.call.return_value={'data':base64.b64encode(raw).decode(),'etag':'v1'}
     await storage.load('workspaces','owner-project')
     transport.call.side_effect=AzureError('blob_put',412)
     with pytest.raises(AzureError):await storage.save('workspaces','owner-project',{'files':[{'path':'test.py'}]})
-    assert storage.index[storage.key('workspaces','owner-project')]['etag']=='v1'
+    assert storage.key('workspaces','owner-project') not in storage.index
     assert transport.call.call_args.kwargs['args']['etag']=='v1'
     assert storage.db.execute('SELECT SUM(bytes) FROM uploads').fetchone()[0]>0
 

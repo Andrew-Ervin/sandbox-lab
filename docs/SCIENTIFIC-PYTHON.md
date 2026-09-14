@@ -1,5 +1,7 @@
 # Scientific Python baseline
 
+This inventory describes the custom scientific image, not Azure’s built-in Python pool. When `quick_backend` is `builtin-python-session-pool`, use its verified baseline and delegate missing dependencies to a headless project. See [Python sessions](PYTHON-SESSION-COMPARISON.md).
+
 The quick, project, headless AI and GUI images inherit the same CPU package layer.
 The reviewed direct inventory is `sandbox/python/requirements.in`; the full transitive,
 hash-pinned resolution is `requirements.lock` in that directory. Packages are loaded

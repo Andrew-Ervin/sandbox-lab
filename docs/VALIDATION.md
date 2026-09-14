@@ -31,3 +31,67 @@ A subsequent real-workspace resize exposed the guest’s 512 MB per-file limit, 
 The populated `pi-viz` home then resized successfully to 1 CPU / 2 GiB in 257.6 seconds. All eight sampled source-file hashes matched after replacement. The original stopped cloud home and private local transfer archive were retained for recovery. Preview reuse now checks the selected source folder before accepting an already-running app, preventing stale previews after a source-sync folder changes.
 
 After the final deployment, both saved apps returned authenticated HTML successfully. Initial opens measured 4.589 and 21.901 seconds; repeated opens measured 0.146–0.362 seconds. Cold-start latency still varies and is not equivalent to warm-preview latency. The resized workstation reopened on its stable editor origin, with Entra sign-in intact.
+
+The chat transition regression was checked in the embedded browser: selecting saved history rendered in 0.85 seconds and returning to New chat rendered in 0.76 seconds in this local run. A fresh no-tool prompt returned `CHAT_LOADING_OK` and appeared in saved history. Keep the embedded client visible while it initializes; hiding it behind readiness state can stall its lifecycle. Browser subscription cancellation must not wait for a background job to end.
+
+The model gateway keeps its upstream HTTP client alive until the last workstation service connection exits. A regression test covers out-of-order workspace shutdown; stopping a warm spare must not break another workspace's inference. Embedded preview servers no longer install process-wide signal handlers over the main broker's handler.
+
+Browser smoke checks after the shared-client fix: Pi, Codex and Claude each returned their requested no-tool sentinel through Ori with Luna selected. Pi's model picker displayed 440 broker-routed entries. These checks establish working panel-to-provider paths; they are not a claim that every catalog model supports every harness protocol. Large-home resize performance was not re-benchmarked in this round.
+
+
+The direct Learn MCP follow-up passed 299 Python tests, seven polling tests, five chat-transport tests, TypeScript, production build, and architecture report generation. A disposable sandbox initialized Learn MCP, discovered its three tools and performed a search; an unrelated destination returned HTTP 403. The test sandbox was deleted. Existing workstation validation confirmed Claude MCP connectivity, Codex discovery, and Pi executing `lab-learn search` from its browser chat and returning a documentation link. The generated app preview rendered its dashboard. Native Connector Namespace deployment is deferred; authenticated GitHub writes remain an unexecuted example requiring a scoped connection.
+
+The measured workstation resume was 9.8 seconds (1.5 seconds Azure resume, 8.2 seconds bootstrap), not a subsecond editor startup. Operations now loads a separate 343 kB JavaScript chunk (approximately 100 kB gzip) on demand. App preview opening skips editor preference and coding-tool setup, and uses owner-checked local lookup instead of inventorying the group. Copilot review fixes retain issued catalog snapshots for the capability lifetime, preserve the requested warm compute size, continue opening after peer profile capture failure, and document the dictation patch.
+
+
+The next optimization round reproduced a blank Vite app: HTML arrived but root-relative module assets lost the preview capability. Capability-scoped HTML/JS/CSS asset routing restored visible LUMA and NEXUS rendering without relaxing isolation. A fresh headless sandbox reached readiness in 4.24 seconds and completed file creation/execution in 4.98 seconds (allocation 0.93, bootstrap 2.98).
+
+A synthetic seven-day home archive was uploaded to private Blob, downloaded and hash-verified, and the original sandbox removed. A new environment restored the saved file and returned ARCHIVE_ROUNDTRIP_OK. Archive took 14.05 seconds and restore plus verification command 8.09 seconds for this small test home. Failure tests retain the original sandbox. The initial live attempt correctly refused an external toolchain link; the known image-owned Rust link is now rebuilt while other external links remain blocking. This does not establish large-home archive throughput or full memory snapshot export.
+
+Final automated verification for this round passed 314 Python tests, the polling suite, TypeScript checking, production build and regenerated architecture report. The seven-day archival policy is enabled in private pilot configuration; no private configuration is included in source.
+
+The final browser pass rendered the Supply Chain optimizer, but Solve still failed: its Vite log reported connection refused on local port 8000 after Python package artifact downloads returned 503. This generated app backend remains an outstanding live validation failure; preview-origin regression tests alone do not establish app action readiness.
+
+## Profiling and package protocol follow-up
+
+320 Python tests, polling tests, TypeScript and the production build passed. The complete first/burst/sequential/live profiling results and cost assumptions are in [Performance profile](PERFORMANCE-PROFILE.md). All 32 original execution checks passed, plus six post-optimization quick checks whose cloud deletions completed. Quick results now return after checkpoint durability and before background deletion completes; reservations remain until confirmed cleanup.
+
+The optimizer failure recorded above was infrastructure-related: uv performs HEAD requests for wheel metadata, which the relay denied. Scoped artifact HEAD now returns verified content length without a body, with the existing age/checksum checks. Locked dependencies restored, the unchanged API command restarted, and the browser Solve action produced the shipment plan after refreshing its expired preview lease. No generated MILP solver or frontend code was modified.
+
+Operations now includes a five-minute background ARM inventory, provisioning state, sandbox group defaults/quotas, registry usage, storage settings, local checkpoint/upload limits, package cache, model call count and pending cleanup. The live inventory confirmed three sandbox groups, one Standard Hot LRS storage account, one Basic registry and one managed identity, with no Dynamic Sessions pool or dedicated environment. Cloud observation failures are explicit; cached data is timestamped.
+
+A matched 10 MiB archival test verified identical file hashes: native resume/read 3.464s, archive 20.151s, Blob rebuild/read 7.266s. The policy remains seven inactive days; recommendations are documented without raising the pilot capacity or budget limits.
+
+Chat navigation regression checks include rapid old/new/old selection, waiting for content load after SDK command acknowledgement, and failure recovery. Browser validation must verify the final conversation contents, not only disappearance of the loading overlay. Built-in pool comparisons use `scripts/builtin_session_client.py` with server-owned user/conversation identifiers; credentials stay in the caller.
+
+Pool routing validation covers owner-scoped identities, hourly accounting, capacity rejection before execution, no replay after ambiguous errors, credential-free file payloads, artifact download and durable checkpoint restore. Verify the configured pool with a browser Python request after changing its endpoint.
+
+## Chat availability and parallel command observation
+
+The full chat is an externally loaded iframe. If initial readiness or a thread transition stalls for eight seconds, the app offers a local recovery chat automatically; it never automatically resubmits a message. The recovery view uses the same authenticated `/api/chatkit` protocol, supports saved history and text submissions, and exposes validated artifact downloads. Interactive approval/widget controls remain in the full view; recovery never synthesizes approval actions. A user can explicitly select text view and later retry the full view. Hidden SDK thread-change events cannot overwrite recovery selection, and reconnect clears the old loaded-thread reference. Full-view transitions hide stale controls immediately and fade in loaded content, respecting reduced motion.
+
+Azure command-result polling backs off from 0.4 to 5 seconds. HTTP 429 retries only the result read for the existing command; it does not relaunch it. Failure to remove a completed command's temporary request/result files is logged without discarding its successful result. This was exercised after five parallel agents exceeded the previous constant-rate polling allowance.
+
+Collection pages use content-pane container queries for compact layouts, including browser zoom and split previews. Workspace actions move below the information at narrower widths; operations metric grids and forms collapse independently of the outer browser width. Verify Apps, Workspaces, Files, Network, Operations and Compute at narrow effective widths, checking horizontal overflow as well as readable labels.
+
+Authentication regression coverage includes concurrent token refresh, refresh-token rotation, unchanged identity, absolute session lifetime, revocation, and retryable provider outages. Workspace/app transitions must retain the editor iframe rather than merely resume its server afterward. A live backend deployment can still disconnect sockets and should be performed with coding agents idle.
+
+Marketplace media regressions check authenticated icon-only retrieval, package-path rejection, image decoding, and denial of redirects to private or unapproved origins. The supported README image path is bounded GitHub-hosted raster media; unknown external media is intentionally not fetched.
+
+Marketplace regression coverage includes the editor's install/redirect query hints,
+unknown/duplicate query rejection, and real asset URI routing. Native model gateway
+tests verify operator-owned search limits and disable behavior. Usage ledger tests
+combine headless and developer requests while preserving owner isolation. Editor
+opening now waits for its existing harness configuration task before returning.
+
+Review follow-up tests cover resize admission before startup, expired unchanged model
+catalogs, malformed completed-command cleanup, and orphan-file reconciliation. The
+supervisor reclaims operation files older than one hour on subsequent launches, using
+an exclusive nonblocking lock to preserve a still-running supervisor. This also recovers
+files after a broker timeout or restart; it never replays the command.
+
+The review also covers failed Blob-write cache invalidation, journaled partial archive
+upload cleanup, recovery-state persistence before shutdown, and retained local backup
+tracking. Recovery chat explicitly loads the latest descending page and presents it
+chronologically, deduplicates older pages, and rejects oversized complete stream frames.
+Stale chat load callbacks cannot replace the currently requested conversation.

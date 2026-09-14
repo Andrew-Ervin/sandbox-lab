@@ -108,8 +108,11 @@ class AzureDeveloper(AzureWorkspaces):
     def __init__(self): super().__init__('developer')
 
     def public(self, ws):
+        from .workspace_usage import suggestion
+        record=self.runtime.record(ws['id'])
         return {'id':ws['id'],'name':ws['name'],'status':ws['latest_build']['status'],'provider':'azure',
                 'harness_status':self.harness.get(ws['id'],'Ready'),
+                'suggested_compute':suggestion(record.get('usage',{}),record.get('compute_size','performance')),
                 'last_used_at':self.runtime.record(ws['id']).get('last_opened_at',self.runtime.record(ws['id'])['created_at']),
                 'compute_size':self.runtime.record(ws['id']).get('compute_size','performance'),
                 'harness_error':self.setup_errors.get(ws['id']),
@@ -117,7 +120,16 @@ class AzureDeveloper(AzureWorkspaces):
 
     async def list(self): return [self.public(w) for w in await self.runtime.list('developer')]
 
-    async def start(self, name, *, owner=None, compute_size='balanced'):
+    def lookup(self, wid):
+        # Opening a known workspace does not need an inventory of its group.
+        # start() still verifies remote readiness before execution or IDE access.
+        from .identity import current_owner
+        record=self.runtime.record(wid)
+        if record['kind']!='developer' or record['state']=='deleted' or record.get('warm') or record.get('owner')!=current_owner.get():
+            raise ValueError('Workspace not found')
+        return self.public(self.runtime.workspace(record))
+
+    async def start(self, name, *, owner=None, compute_size='light'):
         from .titles import clean_title
         from .identity import current_owner
         name=clean_title(name)
@@ -128,17 +140,21 @@ class AzureDeveloper(AzureWorkspaces):
         self.touched[ws['id']]=time.time();self.configure(ws['id'],name)
         return self.public(ws)
 
-    async def prepare(self, workspace):
-        await self.runtime.start(workspace['id'])
+    async def prepare(self, workspace, *, editor=True):
+        await self.runtime.start(workspace['id'],editor=editor)
         self.touched[workspace['id']] = time.time()
         self.runtime.touch(workspace['id'])
         from .activity import background_activity
         if not background_activity.get():
             record=self.runtime.record(workspace['id']);record['last_opened_at']=time.time();self.runtime.save(record)
-        if self.configured_until.get(workspace['id'], 0) < time.time():
+            if editor:await self.runtime.editor_profiles.for_open(record)
+        if editor and self.configured_until.get(workspace['id'], 0) < time.time():
             self.configure(workspace['id'], workspace['name'])
-            # The editor is already healthy. Harness setup has its own visible
-            # status and must not hold the editor open request behind npm work.
+            # Do not return a fresh editor before its user configuration and
+            # extensions exist: the client otherwise caches an empty profile.
+            await asyncio.shield(self.tasks[workspace['id']])
+            if self.harness.get(workspace['id']) != 'Ready':
+                raise RuntimeError('Coding tools could not initialize. Retry opening the workspace.')
 
     async def ide(self, workspace):
         from .previews import previews
@@ -172,6 +188,8 @@ class AzureDeveloper(AzureWorkspaces):
                 if until < time.time()+300 and time.time()-self.touched.get(wid,0)<600:
                     try:
                         from .capabilities import issue
+                        from .workspace_models import refresh
+                        await refresh()
                         payload = issue(wid)
                         await self.invoke(await self.runtime.get(wid),(ROOT/'sandbox/rotate_capability.py').read_text(),payload)
                         self.capability_until[wid] = payload['expires']; self.renewal_error = None
@@ -185,6 +203,8 @@ class AzureQuick:
         from .scaling import WarmPolicy
         self.runtime = runtime(); self.ready = False; self.error = None
         self.slots = asyncio.Semaphore(self.runtime.profile('quick')['active_limit']); self.queued = 0; self.executing = 0
+        from weakref import WeakValueDictionary
+        self.thread_locks = WeakValueDictionary()
         self.policy = WarmPolicy(0,0,600,minimum=0); self.refill = asyncio.Event()
 
     async def pool(self):
@@ -203,9 +223,14 @@ class AzureQuick:
     async def quick(self, code, run, store, input_files=None):
         from .files import inputs
         from . import checkpoints
-        self.queued += 1; started = time.monotonic(); entered = False; ws = None
+        from .identity import current_owner
+        import hashlib
+        owner=current_owner.get()
+        if not owner:raise RuntimeError('Python execution requires a signed-in owner')
+        identity=hashlib.sha256((owner+'\0'+run['thread_id']).encode()).hexdigest()
+        self.queued += 1; started = time.monotonic(); entered = False; ws = None; completed = False
         try:
-            async with self.slots:
+            async with self.thread_locks.setdefault(identity,asyncio.Lock()), self.slots:
                 entered = True; self.queued -= 1; self.executing += 1
                 run['timings'] = {'queue_seconds':time.monotonic()-started}
                 try:
@@ -213,20 +238,34 @@ class AzureQuick:
                     if not (checkpoints.directory(run['thread_id'])/'latest.json').exists() and self.runtime.storage.enabled:
                         saved = await self.runtime.storage.load('chats',run['thread_id'])
                         if saved: checkpoint_files = checkpoints.validate(saved['files'])
-                    ws = await self.runtime.create('quick','quick-'+uuid.uuid4().hex[:12],disposable=True)
+                    phase=time.monotonic()
+                    ws = await self.runtime.create('quick','chat-python-'+identity,disposable=True,owner=owner)
+                    record=self.runtime.record(ws['id']);record['thread_id']=run['thread_id'];self.runtime.save(record)
+                    run['timings']['workspace_seconds']=time.monotonic()-phase
+                    phase=time.monotonic()
                     run.update(pod=ws['name'],status='running',compute_provider='azure'); store.save_run(run)
                     response = await self.runtime.execute(ws['id'],['python','/opt/lab/quick.py'],cwd='/workspace',
                         stdin=json.dumps({'code':code,'files':inputs(store,run['thread_id'],input_files or []),'checkpoint':checkpoint_files}),
                         timeout=value('QUICK_RUN_SECONDS')+15,maximum=value('ARTIFACT_MAX_TOTAL_BYTES')*4+1_000_000)
+                    run['timings']['execution_seconds']=time.monotonic()-phase
+                    phase=time.monotonic()
                     if response['exit_code']: raise RuntimeError('Quick execution failed: '+response.get('stderr','')[:300])
                     result = json.loads(response['stdout']); checkpoint = result.pop('checkpoint',None)
                     if checkpoint is not None:
                         run['checkpoint'] = checkpoints.save(run['thread_id'],run['id'],checkpoint); result['checkpoint'] = run['checkpoint']
                         await self.runtime.storage.save('chats',run['thread_id'],{'files':checkpoints.validate(checkpoint.get('files',[])),'truncated':bool(checkpoint.get('truncated'))})
+                    run['timings']['checkpoint_seconds']=time.monotonic()-phase
                     result.setdefault('artifacts',[]).insert(0,{'name':'quick-source.py','data':base64.b64encode(code.encode()).decode()})
+                    completed=True
                     return result
                 finally:
-                    if ws: await self.runtime.stop(ws['id'],delete=True)
+                    if ws:
+                        phase=time.monotonic()
+                        if completed:
+                            self.runtime.touch(ws['id'])
+                            run['timings']['conversation_scoped']=True
+                        else:await self.runtime.stop(ws['id'],delete=True)
+                        run['timings']['cleanup_seconds']=time.monotonic()-phase
                     self.executing -= 1
                     run['timings']['total_seconds'] = time.monotonic()-started; store.save_run(run)
         finally:

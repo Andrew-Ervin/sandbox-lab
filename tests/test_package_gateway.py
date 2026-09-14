@@ -223,3 +223,15 @@ async def test_distinct_artifacts_download_in_parallel(gateway,monkeypatch):
     monkeypatch.setattr(m,'upstream_client',lambda:httpx.AsyncClient(transport=httpx.MockTransport(lambda req:httpx.Response(200,stream=Stream()))))
     responses=await asyncio.gather(*(m.artifact(add_artifact(m,n,b'content')) for n in ['one','two']))
     for response in responses:assert await serve_response(response)==b'content'
+
+@pytest.mark.asyncio
+async def test_wheel_head_returns_verified_length_without_body_and_rechecks_age(gateway,monkeypatch):
+    m=gateway;payload=b'verified wheel';ident=add_artifact(m,'wheel',payload)
+    monkeypatch.setattr(m,'upstream_client',lambda:httpx.AsyncClient(transport=httpx.MockTransport(lambda req:httpx.Response(200,content=payload))))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=m.app),base_url='http://gateway') as c:
+        r=await c.head('/artifact/'+ident+'/wheel.whl')
+        assert r.status_code==200 and r.content==b'' and int(r.headers['content-length'])==len(payload)
+        assert not m.pins
+        entry=m.downloads[ident];entry['published']=datetime.now(timezone.utc).isoformat();m.downloads[ident]=entry
+        assert (await c.head('/artifact/'+ident+'/wheel.whl')).status_code==403
+        assert (await c.head('/artifact/'+'f'*64+'/unknown.whl')).status_code==404

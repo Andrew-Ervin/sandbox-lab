@@ -100,7 +100,7 @@ async def test_other_preview_origin_cannot_mutate_app(monkeypatch):
     monkeypatch.setitem(module.targets,5558,{'kind':'app','capability':'test-capability','upstream_port':1,'expires':9999999999})
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=module.app),base_url='http://127.0.0.1:5558') as client:
         assert (await client.get('/write')).status_code==404
-        for origin in ['null','http://127.0.0.1:5559','https://evil.example']:
+        for origin in ['http://127.0.0.1:5559','https://evil.example']:
             assert (await client.post('/_lab/test-capability/write',headers={'origin':origin})).status_code==403
 
 

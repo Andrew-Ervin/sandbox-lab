@@ -7,8 +7,16 @@ from .config import ROOT, STATE
 
 async def configure(adapter, workspace):
     from .capabilities import issue
+    from .workspace_models import refresh
+    await refresh()
     record = adapter.runtime.record(workspace['id']); sid = record['sandbox_id']
     group = adapter.runtime.profile('developer')['group']
+    learn=adapter.runtime.config.get('workspace_mcp_learn') is True
+    if record.get('workspace_mcp_learn') is not learn:
+        await adapter.runtime.transport.call('workspace_mcp_policy',group,sid)
+        record['workspace_mcp_learn']=learn;adapter.runtime.save(record)
+    if learn:
+        await adapter.runtime.transport.write(group,sid,'/opt/lab/learn_mcp.py',(ROOT/'sandbox/learn_mcp.py').read_bytes(),'0644')
     ori = STATE/'bin/ori-linux-amd64'
     expected = json.loads((ROOT/'scripts/tool-downloads.lock.json').read_text())['ori-linux-x64']['sha256']
     if not ori.exists() or hashlib.sha256(ori.read_bytes()).hexdigest() != expected:
@@ -36,6 +44,6 @@ async def configure(adapter, workspace):
     package_setup = (ROOT/'sandbox/package_setup.py').read_text()
     templates = {str(p.relative_to(ROOT/'sandbox/ori-templates')):p.read_text() for p in (ROOT/'sandbox/ori-templates').rglob('*') if p.is_file() and not p.is_symlink()}
     extensions=json.loads((ROOT/'infra/editor-extensions.lock.json').read_text())['extensions']
-    payload = {**issue(workspace['id']), 'gui':True, 'package_setup':package_setup, 'ori_templates':templates, 'editor_extensions':extensions}
+    payload = {**issue(workspace['id']), 'gui':True, 'package_setup':package_setup, 'ori_templates':templates, 'cost_tracker':{p.name:p.read_text() for p in (ROOT/'sandbox/cost-tracker').iterdir() if p.name in ('package.json','extension.js')}, 'editor_extensions':extensions,'microsoft_learn_mcp':learn}
     await adapter.invoke(workspace,script+'\nimport json,sys; print(json.dumps(configure(json.load(sys.stdin))))',payload,timeout=300)
     adapter.capability_until[workspace['id']] = payload['expires']

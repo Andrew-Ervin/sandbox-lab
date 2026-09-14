@@ -28,12 +28,26 @@ model = os.environ['OPENROUTER_MODEL']
 allow_search = os.getenv('LAB_ALLOW_WEB_SEARCH', 'true').lower() == 'true'
 
 
+_upstream_lock = asyncio.Lock()
+_upstream_users = 0
+
 @asynccontextmanager
 async def lifespan(app):
-    async with httpx.AsyncClient(timeout=180, proxy=os.getenv("UPSTREAM_PROXY") or None, trust_env=False, follow_redirects=False,
-                                limits=httpx.Limits(max_connections=64, max_keepalive_connections=16)) as upstream:
-        app.state.upstream = upstream
+    # Multiple sandbox service connections share this app. A warm spare ending
+    # must not close the provider connection used by another active workspace.
+    global _upstream_users
+    async with _upstream_lock:
+        if _upstream_users == 0:
+            app.state.upstream = httpx.AsyncClient(timeout=180, proxy=os.getenv("UPSTREAM_PROXY") or None, trust_env=False, follow_redirects=False,
+                limits=httpx.Limits(max_connections=64, max_keepalive_connections=16))
+        _upstream_users += 1
+    try:
         yield
+    finally:
+        async with _upstream_lock:
+            _upstream_users -= 1
+            if _upstream_users == 0:
+                await app.state.upstream.aclose()
 
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
@@ -46,6 +60,9 @@ async def gateway_error(request, error):
         'message': str(error.detail), 'type': 'gateway_error', 'code': 'lab_' + str(error.status_code)}},
         headers={'Cache-Control': 'no-store'})
 
+
+# Set only by the trusted broker, never by a workspace request.
+catalog_resolver = None
 
 def authorize(request):
     try:
@@ -60,7 +77,15 @@ def authorize(request):
             raise ValueError()
         data = json.loads(base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)))
         now = time.time()
-        if not isinstance(data, dict) or data.get('aud') != AUDIENCE or data.get('model') != model:
+        if not isinstance(data, dict) or data.get('aud') != AUDIENCE or not isinstance(data.get('model'),str):
+            raise ValueError()
+        if 'catalog' in data:
+            if not isinstance(data['catalog'],str) or catalog_resolver is None:raise ValueError()
+            data['models']=catalog_resolver(data['catalog'])
+        models=data.get('models',[data['model']])
+        if not isinstance(models,list) or not 1 <= len(models) <= (2048 if 'catalog' in data else 64) or data['model'] not in models or any(not isinstance(item,str) or not 1 <= len(item) <= 160 for item in models):
+            raise ValueError()
+        if 'models' not in data and data['model'] != model:
             raise ValueError()
         if any(type(data.get(k)) is not int for k in ('iat', 'exp')):
             raise ValueError()
@@ -75,12 +100,12 @@ def authorize(request):
         raise HTTPException(403, 'Invalid model capability') from None
 
 
-def compatible_messages(messages):
+def compatible_messages(messages, selected_model=None):
     # Old Pi OpenAI sessions can replay provider-specific reasoning that prevents
     # ZDR routing. Omit it only from completed turns on the outbound request.
     # Keep visible/tool history and current-turn reasoning for tool continuation;
     # never rewrite saved sessions or strip other providers' signed thinking.
-    if not model.startswith('openai/'):
+    if not (selected_model or model).startswith('openai/'):
         return messages
     last_user = max((i for i, message in enumerate(messages) if message['role'] == 'user'), default=-1)
     replay_fields = {'reasoning_details', 'reasoning', 'reasoning_content'}
@@ -91,7 +116,15 @@ def compatible_messages(messages):
     ]
 
 
-def prepare_body(body):
+def requested_model(body, claims, *, selectable=True):
+    if not selectable:return claims['model']
+    requested=body.get('model',claims['model'])
+    if not isinstance(requested,str) or requested not in claims.get('models',[claims['model']]):
+        raise HTTPException(403, 'Model is not enabled for this workspace')
+    return requested
+
+
+def prepare_body(body, claims=None):
     if not isinstance(body, dict):
         raise HTTPException(400, 'Expected a JSON object')
     messages = body.get('messages')
@@ -119,12 +152,15 @@ def prepare_body(body):
     if not isinstance(tools, list) or len(tools) > 32:
         raise HTTPException(400, 'Invalid tools')
     tools = [t for t in tools if isinstance(t, dict) and t.get('type') == 'function' and isinstance(t.get('function'), dict)]
+    selectable=claims is not None
+    claims=claims or {'model':model,'models':[model]}
+    selected=requested_model(body,claims,selectable=selectable)
     allowed = {'messages', 'tool_choice', 'stream', 'temperature', 'top_p', 'stop', 'parallel_tool_calls'}
     result = {k: v for k, v in body.items() if k in allowed}
-    result['messages'] = compatible_messages(messages)
+    result['messages'] = compatible_messages(messages, selected)
     if 'stream' in result and type(result['stream']) is not bool:
         raise HTTPException(400, 'Invalid streaming option')
-    result.update(model=model, max_tokens=16000,
+    result.update(model=selected, max_tokens=16000,
                   reasoning={'effort': os.getenv('OPENROUTER_REASONING', 'xhigh')},
                   provider=provider_policy())
     # Search is an approved disclosure channel, not a DLP control. Admin can disable it.
@@ -140,8 +176,8 @@ def prepare_body(body):
     return result
 
 
-def prepare_native(body, protocol):
-    """Allow local harness tools, never upstream URL fetching or server-side tools."""
+def prepare_native(body, protocol, claims=None):
+    """Allow local harness tools plus operator-configured OpenRouter search."""
     if not isinstance(body, dict):
         raise HTTPException(400, 'Expected a JSON object')
     def check(value):
@@ -163,6 +199,8 @@ def prepare_native(body, protocol):
     tools = body.get('tools', [])
     if not isinstance(tools, list) or len(tools) > 128:
         raise HTTPException(400, 'Invalid tools')
+    # Search configuration is supplied by the broker, never by workspace input.
+    tools = [t for t in tools if not (isinstance(t, dict) and t.get('type') == 'openrouter:web_search')]
     for tool in tools:
         if not isinstance(tool, dict): raise HTTPException(400, 'Invalid tool')
         if protocol == 'responses':
@@ -172,7 +210,14 @@ def prepare_native(body, protocol):
             raise HTTPException(400, 'Only local tools are permitted')
     allowed = {field, 'instructions', 'system', 'tools', 'tool_choice', 'stream', 'parallel_tool_calls'}
     result = {k:v for k,v in body.items() if k in allowed}
-    result.update(model=model, provider=provider_policy())
+    selectable=claims is not None
+    claims=claims or {'model':model,'models':[model]}
+    result.update(model=requested_model(body,claims,selectable=selectable), provider=provider_policy())
+    result['tools'] = list(tools)
+    search = web_search_tool() if allow_search else None
+    if search:
+        result['tools'].append(search)
+        result['max_tool_calls'] = search['parameters']['max_uses']
     if protocol == 'responses':
         result.update(store=False, max_output_tokens=16000,
                       reasoning={'effort': os.getenv('OPENROUTER_REASONING', 'xhigh')})
@@ -205,7 +250,7 @@ async def completions(request: Request):
         raise HTTPException(408) from None
     try:
         protocol = request.url.path.rsplit('/', 1)[-1]
-        body = prepare_body(json.loads(raw)) if protocol == 'completions' else prepare_native(json.loads(raw), protocol)
+        body = prepare_body(json.loads(raw),claims) if protocol == 'completions' else prepare_native(json.loads(raw), protocol,claims)
     except (ValueError, UnicodeError, RecursionError):
         raise HTTPException(400, 'Invalid JSON') from None
     client = request.app.state.upstream

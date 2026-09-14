@@ -5,7 +5,7 @@ from fastapi import FastAPI,Request,HTTPException,WebSocket,WebSocketDisconnect
 from fastapi.responses import Response, JSONResponse
 from .image_view import render as render_image
 app=FastAPI(docs_url=None,redoc_url=None,openapi_url=None)
-# One app per localhost port: relative assets resolve normally, with no path rewriting.
+# One isolated app per localhost port, with capability-scoped asset URLs.
 targets={}
 
 def upstream_client(target):
@@ -56,7 +56,9 @@ async def preview(path:str,request:Request):
     if target.get('kind')=='app':
         path=app_path(target,path,request)
         if path is None:raise HTTPException(404,'Preview not found')
-    elif not identity.preview_allowed(target,request.cookies):raise HTTPException(404,'Preview not found')
+    else:
+        await identity.authenticate(request.cookies.get('lab_session', ''))
+        if not identity.preview_allowed(target,request.cookies):raise HTTPException(404,'Preview not found')
     if request.headers.get('host')!=f'127.0.0.1:{port}': raise HTTPException(403)
     common={'Content-Security-Policy':APP_CSP.replace("connect-src 'self'",f"connect-src 'self' ws://127.0.0.1:{port}"),'X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Cache-Control':'no-store','Access-Control-Allow-Origin':'null'}
     if target['kind']=='ide':
@@ -65,14 +67,24 @@ async def preview(path:str,request:Request):
         # literally. Restrict the standard virtual host class to installed editor
         # assets; workspace files and arbitrary external hosts remain excluded.
         virtual_files='https://*.vscode-resource.vscode-cdn.net/home/sandbox/.local/share/code-server/extensions/'
-        common['Content-Security-Policy']=f"default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: {virtual_files}; style-src 'self' 'unsafe-inline' {virtual_files}; img-src 'self' data: blob: {virtual_files}; font-src 'self' data: {virtual_files}; connect-src 'self' ws://127.0.0.1:{port} {virtual_files}; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; frame-ancestors 'self' http://127.0.0.1:3000 http://localhost:3000"
+        common['Content-Security-Policy']=f"default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: {virtual_files}; style-src 'self' 'unsafe-inline' {virtual_files}; img-src 'self' data: blob: https://github.com https://raw.githubusercontent.com https://cdn.jsdelivr.net https://user-images.githubusercontent.com https://private-user-images.githubusercontent.com {virtual_files}; font-src 'self' data: {virtual_files}; connect-src 'self' ws://127.0.0.1:{port} {virtual_files}; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; frame-ancestors 'self' http://127.0.0.1:3000 http://localhost:3000"
+    if target['kind']=='ide' and path.startswith('__lab/marketplace-icons/'):
+        # The browser may retrieve catalog icons only, never packages or arbitrary URLs.
+        import re
+        asset_path=path.removeprefix('__lab/marketplace-icons/')
+        if request.method not in ('GET','HEAD') or not re.fullmatch(r'(?:remote/[a-f0-9]{64}|[A-Za-z0-9_.-]+)/Microsoft\.VisualStudio\.Services\.Icons\.Default',asset_path):raise HTTPException(404)
+        from sandbox.editor_gallery import asset
+        result=await asset(*asset_path.split('/',1))
+        media_type='image/png' if result.body.startswith(b'\x89PNG\r\n\x1a\n') else result.media_type
+        if not media_type or not media_type.startswith('image/'):raise HTTPException(404)
+        return Response(result.body,media_type=media_type,headers={'Cache-Control':'private, max-age=3600','X-Content-Type-Options':'nosniff','Content-Security-Policy':"sandbox; default-src 'none'"})
     if target['kind']=='ide' and path=='__lab/editor-activity':
         if request.method!='POST' or request.headers.get('origin')!=f'http://127.0.0.1:{port}':raise HTTPException(403)
         from .azure_runtime import runtime
         from .previews import previews
         control=runtime();record=control.record(target['workspace_id'])
         if record['state']!='running':raise HTTPException(409,'Reopen this workspace to resume it')
-        control.touch(record['id']);control.warm.demand('developer');previews.renew_workspace(record['id'])
+        control.touch(record['id']);control.warm.demand('developer',record.get('compute_size'));previews.renew_workspace(record['id'])
         if time.time()-record.get('preferences_saved_at',0)>30:
             await control.editor_profiles.capture(record)
             record=control.record(record['id']);record['preferences_saved_at']=time.time();control.save(record)
@@ -113,7 +125,9 @@ async def preview(path:str,request:Request):
             content=render(content,name);media='text/html'
         if media=='text/html':content+=ACTIVITY
         return Response(content,media_type=media,headers=common)
-    if request.method not in ('GET','HEAD') and request.headers.get('origin')!=f'http://127.0.0.1:{port}':raise HTTPException(403,'Untrusted preview origin')
+    allowed_origins={f'http://127.0.0.1:{port}'}
+    if target['kind']=='app':allowed_origins.add('null')  # Opaque sandbox; capability path already authenticated.
+    if request.method not in ('GET','HEAD') and request.headers.get('origin') not in allowed_origins:raise HTTPException(403,'Untrusted preview origin')
     raw=await request.body()
     if len(raw)>2_000_000: raise HTTPException(413)
     # Fixed loopback destination from our own Azure port forward; never a user URL.
@@ -145,7 +159,11 @@ async def preview(path:str,request:Request):
         from sandbox.editor_preferences import LAYOUT_KEYS
         profile=runtime().editor_profiles.get(target.get('owner',''))['profile'] or {}
         code=(ROOT/'sandbox/editor_layout.js').read_text().replace('__LAB_PROFILE__',__import__('json').dumps(profile.get('layout',{})).replace('<','\\u003c')).replace('__LAB_KEYS__',__import__('json').dumps(sorted(LAYOUT_KEYS)))
+        code += '\n' + (ROOT/'sandbox/editor_marketplace_images.js').read_text()
         body=body.replace(b'<head>',b'<head><script>'+code.encode()+b'</script>',1)
+    if target['kind']=='app':
+        from .preview_assets import rewrite
+        body=rewrite(body,r.headers.get('content-type',''),target['capability'])
     if target['kind']!='ide' and 'text/html' in r.headers.get('content-type',''):
         base=b'<base href="/_lab/'+target['capability'].encode()+b'/">'
         body=body.replace(b'<head>',b'<head>'+base,1)
@@ -161,6 +179,10 @@ async def preview_socket(websocket:WebSocket,path:str):
     from websockets.asyncio.client import connect
     from websockets.exceptions import WebSocketException
     port=websocket.url.port;target=targets.get(port)
+    if target and target.get('kind') == 'ide':
+        try: await identity.authenticate(websocket.cookies.get('lab_session', ''))
+        except HTTPException:
+            await websocket.close(code=1013); return
     if (not target or target.get('kind') not in ('app','ide') or target['expires']<time.time()
         or websocket.headers.get('host')!=f'127.0.0.1:{port}'
         or (target.get('kind')=='ide' and (not identity.preview_allowed(target,websocket.cookies) or websocket.headers.get('origin')!=f'http://127.0.0.1:{port}'))):

@@ -37,7 +37,10 @@ def pack(home,path):
         if info.isdev() or info.isfifo():return None
         if info.issym():
             resolved=((home/info.name).parent/info.linkname).resolve()
-            if not resolved.is_relative_to(home):skipped.append(info.name);return None
+            if not resolved.is_relative_to(home):
+                # This image-owned toolchain is recreated by project-init.sh.
+                if info.name=='.rustup/toolchains/preinstalled' and resolved.is_relative_to(Path('/opt/rust-toolchains')):return None
+                skipped.append(info.name);return None
             info.linkname=os.path.relpath(resolved,(home/info.name).parent)
         total+=info.size
         if total>MAX_SOURCE_BYTES:raise ValueError('Saved home exceeds the safe migration limit')

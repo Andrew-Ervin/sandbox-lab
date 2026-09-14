@@ -29,7 +29,7 @@ class WarmPool:
     def claim(self, kind, name, *, disposable=False, compute_size=None):
         # Called under the allocator lock. Standby never contains user work.
         for r in self.runtime.records(kind):
-            if r.get('warm') and (kind!='developer' or r.get('compute_size','performance')==(compute_size or 'balanced')) and r['state']=='running' and r.get('lease_until',0)>time.time()+60:
+            if r.get('warm') and (kind!='developer' or r.get('compute_size','performance')==(compute_size or 'light')) and r['state']=='running' and r.get('lease_until',0)>time.time()+60:
                 r.update(warm=False,disposable=disposable or kind=='quick',name=name,last_activity_at=time.time())
                 self.runtime.save(r);self.hits+=1;return r
         self.misses+=1
@@ -45,7 +45,7 @@ class WarmPool:
             else:
                 try:
                     if kind=='developer':
-                        wanted_size=getattr(self,'compute_size','balanced')
+                        wanted_size=getattr(self,'compute_size','light')
                         for record in records:
                             if record.get('compute_size','performance')!=wanted_size:
                                 await self.runtime.stop(record['id'],delete=True)

@@ -24,7 +24,9 @@ PROFILES = {
 }
 
 
-SIZES={'light':{'cpu':'1000m','memory':'2048Mi','hourly_usd':.108},'balanced':{'cpu':'2000m','memory':'4096Mi','hourly_usd':.216},'performance':{'cpu':'4000m','memory':'8192Mi','hourly_usd':.432}}
+# Sandbox CPU, memory and disk are a single Azure tier.  The image is separate
+# from this choice; changing a tier never needs a new image build.
+SIZES={'light':{'cpu':'1000m','memory':'2048Mi','disk_gib':20,'hourly_usd':.108},'balanced':{'cpu':'2000m','memory':'4096Mi','disk_gib':40,'hourly_usd':.216},'performance':{'cpu':'4000m','memory':'8192Mi','disk_gib':80,'hourly_usd':.432}}
 
 class CapacityBusy(RuntimeError): pass
 
@@ -52,6 +54,10 @@ class AzureRuntime:
         from .editor_profiles import EditorProfiles
         self.editor_profiles=EditorProfiles(self)
         self.resizing=set()
+        from .azure_archive import AzureArchive
+        self.archive=AzureArchive(self)
+        from .quick_cleanup import QuickCleanup
+        self.quick_cleanup=QuickCleanup(self)
 
     def configured(self):
         if any(not self.config.get(k) for k in ('subscription_id', 'resource_group', 'region')):
@@ -110,15 +116,15 @@ class AzureRuntime:
             record = previous or (self.warm.claim(kind,name,disposable=disposable,compute_size=compute_size) if not warm else None)
             if record is None:
                 record={'id':wid or str(uuid.uuid4()),'name':name,'kind':kind,'state':'creating','created_at':time.time(),'updated_at':time.time(),'sandbox_id':None,'disposable':disposable or kind=='quick','warm':warm}
-                if kind=='developer':record['compute_size']=compute_size or 'balanced'
+                if kind=='developer':record['compute_size']=compute_size or 'light'
                 self.save(record)
             if owner and not warm:record['owner']=owner;self.save(record)
         return await self.start(record['id'],standby=warm)
 
-    async def start(self, wid, *, standby=False):
+    async def start(self, wid, *, standby=False, editor=True):
         if wid in self.resizing:raise RuntimeError('Workspace size is changing. Please wait.')
         kind=self.record(wid)['kind']
-        if not standby:self.warm.demand(kind)
+        if not standby:self.warm.demand(kind,self.record(wid).get('compute_size'))
         self.queued[kind]=self.queued.get(kind,0)+1
         begin=time.monotonic(); generation=self.admission_generation
         try:
@@ -126,7 +132,7 @@ class AzureRuntime:
                 while True:
                     if generation!=self.admission_generation:raise RuntimeError('Compute admission was cancelled by Stop all')
                     try:
-                        result=await self._start(self.record(wid))
+                        result=await self._start(self.record(wid), editor=editor)
                         self.telemetry.event(kind,wid,'admitted',seconds=time.monotonic()-begin)
                         return result
                     except CapacityBusy:
@@ -134,14 +140,27 @@ class AzureRuntime:
                         await asyncio.sleep(1)
         finally:self.queued[kind]-=1
 
-    async def _start(self, record):
+    async def _start(self, record, *, editor=True):
         started = time.monotonic(); stages = {}
+        if record.get('cold_archive') and record.get('sandbox_id'):
+            try:await self.transport.call('get',self.profile(record['kind'])['group'],record['sandbox_id'])
+            except AzureError as error:
+                if error.status_code!=404:raise
+                record.setdefault('previous_sandboxes',[]).append(record['sandbox_id'])
+                record.update(sandbox_id=None,create_submitted=False,archive_frozen=False)
+                self.save(record)
+        if record.get('cold_archive') and not record.get('sandbox_id'):
+            await self.archive.restore(record)
+            record=self.record(record['id'])
         profile = self.allocation(record); group = profile['group']
         if record['state'] == 'deleted': raise RuntimeError('Workspace has been deleted')
         if record.get('sandbox_id'):
             current = await self.transport.call('get', group, record['sandbox_id'])
             if current['state'] == 'Running' and record.get('prepared') and record.get('lease_until',0) > time.time()+30:
-                await self.ensure_services(record); return self.workspace(record, current)
+                await self.ensure_services(record)
+                if editor and record["kind"]=="developer" and not record.get("editor_prepared"):
+                    await self.install_ide(record);record["editor_prepared"]=True;self.save(record)
+                return self.workspace(record, current)
         else:
             # A timed-out create is recovered by an immutable broker-generated label.
             found = [s for s in await self.transport.call('list', group) if s.get('labels',{}).get('lab-workspace') == record['id'] and s['id'] not in record.get('previous_sandboxes',[])]
@@ -159,7 +178,7 @@ class AzureRuntime:
             live=await self.transport.call('list',group)
             if not record.get('sandbox_id') and len(live)>=profile['retained_limit']:
                 raise RuntimeError('Saved workspace quota reached; raise the Azure group quota without deleting user work.')
-            active=[r for r in self.records() if r['id']!=record['id'] and r['state'] in ('running','starting','failed') and r.get('charge')]
+            active=[r for r in self.records() if r['id']!=record['id'] and r['state'] in ('running','starting','failed','stopping','deleting') and r.get('charge')]
             remote_active=sum(v['id']!=record.get('sandbox_id') and v['state'] not in ('Stopped','Suspended') for v in live)
             if max(remote_active,sum(r['kind']==record['kind'] for r in active))>=profile['active_limit']:
                 raise CapacityBusy('Waiting for an available compute slot')
@@ -181,9 +200,15 @@ class AzureRuntime:
             else:
                 current = await self.transport.call('get', group, record['sandbox_id'])
                 if current['state'] != 'Running': current = await self.transport.call('resume', group, record['sandbox_id'])
+            if record.get('archive_frozen'):
+                await self.archive.freeze(record,False);record['archive_frozen']=False;self.save(record)
             stages['azure_allocate_or_resume_seconds'] = round(time.monotonic()-started,3)
-            await self.bootstrap(record)
+            await self.bootstrap(record, editor=editor)
             stages['bootstrap_seconds'] = round(time.monotonic()-started-stages['azure_allocate_or_resume_seconds'],3)
+            if record.get('source_restore'):
+                await self.restore_source(record)
+                stages['source_restore_seconds'] = round(time.monotonic()-started-sum(stages.values()),3)
+            if record.get('cold_archive'):record['previous_cold_archive']=record.pop('cold_archive')
             record.update(state='running', prepared=True, updated_at=time.time(), last_activity_at=time.time()); self.save(record)
             await self.ensure_services(record)
             record['startup_timings'] = {**stages, 'total_seconds':round(time.monotonic()-started,3)}
@@ -235,11 +260,11 @@ class AzureRuntime:
         if result['exit_code']: raise RuntimeError('Azure runtime preparation failed: '+result.get('stderr','')[-1500:])
         return result['stdout']
 
-    async def bootstrap(self, record):
+    async def bootstrap(self, record, *, editor=True):
         group = self.profile(record['kind'])['group']; sid = record['sandbox_id']
         # All root commands below are broker source, never model/workspace text.
         init = (ROOT/'sandbox/azure_bootstrap.py').read_text()
-        await self.root_exec(record, 'python -I -c '+shlex.quote(init))
+        installed = (await self.root_exec(record, 'python -I -c '+shlex.quote(init+"\nfrom pathlib import Path; p=Path('/opt/lab/runtime.sha256'); print(p.read_text() if p.is_file() else '')"))).strip()
         if record.get('home_restore'):
             archive=Path(record['home_restore'])
             if archive.parent!=self.root/'home-transfers' or archive.is_symlink():raise RuntimeError('Invalid saved home transfer')
@@ -255,7 +280,7 @@ class AzureRuntime:
             await self.transport.call('remove_file',group,sid,{'path':remote+'.part'})
             record['home_transfer_backup']=record.pop('home_restore');self.save(record)
         # One immutable bundle transfer, only when the trusted runtime changed.
-        names = ['azure_execute.py','azure_bridge.py','quick.py','checkpoint.py','collect.py','plot_capture.py','render_plot.py','package_setup.py']
+        names = ['azure_execute.py','azure_bridge.py','quick.py','checkpoint.py','collect.py','plot_capture.py','render_plot.py','package_setup.py','project-init.sh']
         output = io.BytesIO()
         with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
             for name in names: archive.writestr(zipfile.ZipInfo(name), (ROOT/'sandbox'/name).read_bytes(), compress_type=zipfile.ZIP_DEFLATED)
@@ -270,8 +295,6 @@ class AzureRuntime:
                     if file.is_file() and not file.is_symlink():
                         archive.writestr(zipfile.ZipInfo('pi-chat/'+str(file.relative_to(folder))), file.read_bytes(), compress_type=zipfile.ZIP_DEFLATED)
         bundle = output.getvalue(); digest = hashlib.sha256(bundle).hexdigest()
-        check = "from pathlib import Path; p=Path('/opt/lab/runtime.sha256'); print(p.read_text() if p.is_file() else '')"
-        installed = (await self.root_exec(record, 'python -I -c '+shlex.quote(check))).strip()
         if installed != digest:
             await self.transport.write(group, sid, '/var/lib/lab/runtime.zip', bundle)
             unpack = "import zipfile; from pathlib import Path; zipfile.ZipFile('/var/lib/lab/runtime.zip').extractall('/opt/lab'); Path('/opt/lab/runtime.sha256').write_text("+repr(digest)+")"
@@ -279,8 +302,9 @@ class AzureRuntime:
         if record['kind']=='quick':return
         # Reset the relay and its single-sandbox credential each runtime lease.
         record['bridge_token'] = secrets.token_urlsafe(48)
-        await self.transport.write(group, sid, '/var/lib/lab/bridge.json', json.dumps({'token':record['bridge_token'], 'developer':record['kind']=='developer', 'deadline':record['lease_until']}).encode())
+        bridge_config = json.dumps({'token':record['bridge_token'], 'developer':record['kind']=='developer', 'deadline':record['lease_until']})
         launcher = "import os,signal,subprocess; from pathlib import Path\np=Path('/var/lib/lab/bridge.pid')\nif p.exists():\n try:\n  pid=int(p.read_text())\n  if b'/opt/lab/azure_bridge.py' in Path('/proc',str(pid),'cmdline').read_bytes(): os.kill(pid,signal.SIGTERM)\n except (ProcessLookupError,FileNotFoundError): pass\nf=open('/var/lib/lab/bridge.log','ab'); child=subprocess.Popen(['python','/opt/lab/azure_bridge.py'],cwd='/opt/lab',stdin=subprocess.DEVNULL,stdout=f,stderr=f,start_new_session=True); p.write_text(str(child.pid))"
+        launcher="from pathlib import Path; p=Path('/var/lib/lab/bridge.json'); p.write_text("+repr(bridge_config)+"); p.chmod(0o600)\n"+launcher
         await self.root_exec(record, 'python -I -c '+shlex.quote(launcher))
         port = await self.transport.call('bridge_port', group, sid)
         from urllib.parse import urlsplit
@@ -303,7 +327,10 @@ class AzureRuntime:
             await self.root_exec(record,'python -I -c '+shlex.quote(script))
             result = await self.execute(record['id'], ['sh','/opt/lab/project-init.sh'], timeout=30, bootstrap=True)
             if result['exit_code']: raise RuntimeError('Preinstalled language environment initialization failed')
-        if record['kind'] == 'developer': await self.install_ide(record)
+        record['editor_prepared']=False
+        if record['kind'] == 'developer' and editor:
+            await self.install_ide(record);record['editor_prepared']=True
+        self.save(record)
 
     async def verify_bridge(self, record):
         import httpx
@@ -344,7 +371,7 @@ class AzureRuntime:
         from .activity import background_activity
         tracked=not kwargs.get('bootstrap',False)
         foreground=tracked and not background_activity.get()
-        if foreground:self.touch(wid);self.warm.demand(self.record(wid)['kind'])
+        if foreground:self.touch(wid);self.warm.demand(self.record(wid)['kind'],self.record(wid).get('compute_size'))
         if tracked:self.active_commands[wid]=self.active_commands.get(wid,0)+1
         began=time.monotonic()
         try:
@@ -356,11 +383,12 @@ class AzureRuntime:
             raise
         finally:
             if tracked:self.active_commands[wid]-=1
-            if foreground:self.touch(wid);self.warm.demand(self.record(wid)['kind'])
+            if foreground:self.touch(wid);self.warm.demand(self.record(wid)['kind'],self.record(wid).get('compute_size'))
 
     async def _execute(self, wid, argv, *, stdin='', cwd='/home/sandbox/project', timeout=60, maximum=1_000_000,
                       limits=None, bootstrap=False, environment_setup=False):
         record = self.record(wid)
+        if wid in self.resizing and not bootstrap:raise RuntimeError('Workspace storage or compute is changing; retry shortly')
         if not bootstrap and (record['state']!='running' or record.get('lease_until',0) <= time.time() or self.budget.status()['blocked']):
             raise RuntimeError('Sandbox execution lease expired; reopen it to reserve another bounded lease.')
         if not isinstance(argv, list) or not argv or not all(isinstance(a,str) and '\0' not in a for a in argv): raise ValueError('Invalid command')
@@ -371,22 +399,41 @@ class AzureRuntime:
         group = self.profile(record['kind'])['group']; sid = record['sandbox_id']; ident = uuid.uuid4().hex
         request = {'argv':argv,'stdin':stdin,'cwd':cwd,'timeout':timeout,'maximum':maximum,'limits':sandbox_environment() if limits is None else limits}
         async with self.exec_slots:
-            await self.transport.write(group, sid, f'/var/lib/lab/requests/{ident}.request', json.dumps(request).encode())
+            payload=json.dumps(request)
             launcher = 'import subprocess; subprocess.Popen('+repr(['python','-I','/opt/lab/azure_execute.py',ident])+',stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)'
+            if len(payload.encode())<=24000:
+                # Small commands need one SDK trip to write and launch. Large
+                # inputs keep the bounded file-transfer path.
+                launcher='from pathlib import Path; p=Path('+repr(f'/var/lib/lab/requests/{ident}.request')+'); p.write_text('+repr(payload)+'); p.chmod(0o600); '+launcher
+            else:
+                await self.transport.write(group, sid, f'/var/lib/lab/requests/{ident}.request',payload.encode())
             await self.root_exec(record, 'python -I -c '+shlex.quote(launcher))
-            async with asyncio.timeout(timeout+45):
-                while True:
-                    if not bootstrap and self.record(wid)['state']!='running':
-                        raise RuntimeError('Workspace stopped while this command was running; no further file reads were sent.')
-                    try:
-                        raw = await self.transport.read(group, sid, f'/var/lib/lab/requests/{ident}.result', maximum+200000)
-                        result = json.loads(raw)
-                        break
-                    except AzureError as error:
-                        if error.status_code != 404: raise
-                    await asyncio.sleep(.4)
-            for suffix in ('request','result'):
-                await self.transport.call('remove_file', group, sid, {'path':f'/var/lib/lab/requests/{ident}.{suffix}'})
+            completed = False
+            try:
+                async with asyncio.timeout(timeout+45):
+                    poll_delay = .4
+                    while True:
+                        if not bootstrap and self.record(wid)['state']!='running':
+                            raise RuntimeError('Workspace stopped while this command was running; no further file reads were sent.')
+                        try:
+                            raw = await self.transport.read(group, sid, f'/var/lib/lab/requests/{ident}.result', maximum+200000)
+                            completed = True
+                            result = json.loads(raw)
+                            break
+                        except AzureError as error:
+                            if error.status_code not in (404, 429): raise
+                            if error.status_code == 429: poll_delay = max(poll_delay, 5)
+                        # Long agents previously generated 150 reads/minute each.
+                        # Retry only observation of this already-launched command.
+                        await asyncio.sleep(poll_delay)
+                        poll_delay = min(5, poll_delay * 1.5)
+            finally:
+                if completed:
+                    for suffix in ('request','result'):
+                        try:
+                            await self.transport.call('remove_file', group, sid, {'path':f'/var/lib/lab/requests/{ident}.{suffix}'})
+                        except AzureError as error:
+                            self.telemetry.event(record['kind'], wid, 'command_cleanup_failed', error=str(error))
             return result
 
     async def ensure_services(self, record):
@@ -426,31 +473,40 @@ class AzureRuntime:
 
     async def stop(self, wid, *, delete=False, only_if_idle=False):
         async with self.workspace_locks.setdefault(wid,asyncio.Lock()):
-            record = self.record(wid)
-            # Activity may have resumed while maintenance waited for startup.
-            if only_if_idle and not self.is_idle(record): return
-            if record['state'] == 'deleted' or (record['state']=='stopped' and not delete): return
-            if not record.get('sandbox_id'):
-                if record.get('create_submitted'): raise RuntimeError('Reconcile the pending Azure create before cleanup')
-                record['state'] = 'deleted'; self.save(record); return
-            if record['kind'] != 'quick' and not record.get('disposable') and record['state'] == 'running':
-                try:
-                    if record['kind']=='developer':await self.editor_profiles.capture(record)
-                    await self.backup_source(record)
-                    record = self.record(wid)
-                except Exception:
-                    record['storage_error'] = 'Cloud source checkpoint failed; the sandbox disk is retained.'
-                    self.save(record)
-            task = self.services.pop(wid, None)
-            if task: task.cancel(); await asyncio.gather(task, return_exceptions=True)
-            record['state'] = 'deleting' if delete else 'stopping'; self.save(record)
-            await self.transport.call('delete' if delete else 'stop', self.profile(record['kind'])['group'], record['sandbox_id'])
+            return await self._stop(wid,delete=delete,only_if_idle=only_if_idle)
+
+    async def _stop(self,wid,*,delete=False,only_if_idle=False,skip_checkpoint=False):
+        record = self.record(wid)
+        # Activity may have resumed while maintenance waited for startup.
+        if only_if_idle and not self.is_idle(record): return
+        if record['state'] == 'deleted' or (record['state']=='stopped' and not delete): return
+        if not record.get('sandbox_id'):
+            if record.get('create_submitted'): raise RuntimeError('Reconcile the pending Azure create before cleanup')
+            if delete:await self.archive.delete(record)
             if record.get('charge'):
-                self.budget.finish(record.pop('charge'), self.rate(record)*max(0,time.time()-record['lease_started'])/3600)
-            record.update(state='deleted' if delete else 'stopped', updated_at=time.time(), prepared=False)
-            record.setdefault('first_exit_at',time.time())
-            self.telemetry.event(record['kind'],wid,'deleted' if delete else 'stopped')
-            self.save(record)
+                self.budget.finish(record.pop('charge'),self.rate(record)*max(0,time.time()-record['lease_started'])/3600)
+            record['state'] = 'deleted'; self.save(record); return
+        if not skip_checkpoint and record['kind'] != 'quick' and not record.get('disposable') and record['state'] == 'running':
+            try:
+                if record['kind']=='developer':await self.editor_profiles.capture(record)
+                await self.backup_source(record)
+                record = self.record(wid)
+            except Exception:
+                record['storage_error'] = 'Cloud source checkpoint failed; the sandbox disk is retained.'
+                self.save(record)
+        task = self.services.pop(wid, None)
+        if task: task.cancel(); await asyncio.gather(task, return_exceptions=True)
+        record['state'] = 'deleting' if delete else 'stopping'; self.save(record)
+        await self.transport.call('delete' if delete else 'stop', self.profile(record['kind'])['group'], record['sandbox_id'])
+        if delete:
+            record.update(sandbox_id=None,create_submitted=False);self.save(record)
+            await self.archive.delete(record)
+        if record.get('charge'):
+            self.budget.finish(record.pop('charge'), self.rate(record)*max(0,time.time()-record['lease_started'])/3600)
+        record.update(state='deleted' if delete else 'stopped', updated_at=time.time(), prepared=False)
+        record.setdefault('first_exit_at',time.time())
+        self.telemetry.event(record['kind'],wid,'deleted' if delete else 'stopped')
+        self.save(record)
 
     async def resize(self,wid,size):
         if size not in SIZES:raise ValueError('Unknown compute size')
@@ -458,41 +514,16 @@ class AzureRuntime:
         if record['kind']!='developer':raise ValueError('This workspace cannot change size')
         if record.get('compute_size','performance')==size:return await self.get(wid)
         if wid in self.resizing or self.active_commands.get(wid):raise RuntimeError('Wait for the current workspace operation to finish')
-        await self.start(wid)
         self.resizing.add(wid)
         remote='/tmp/lab-home-'+uuid.uuid4().hex+'.parts'
         local=self.root/'home-transfers'/(wid+'-'+uuid.uuid4().hex+'.tgz')
-        local.parent.mkdir(exist_ok=True,mode=0o700)
         try:
+            local.parent.mkdir(exist_ok=True,mode=0o700)
+            await self.start(wid)
             # Snapshot restore cannot change CPU/RAM. Transfer the user's home
             # instead; preserve the original stopped environment as recovery.
             await self.editor_profiles.capture(self.record(wid))
-            result=await self.execute(wid,['python','-I','-c',(ROOT/'sandbox/home_archive.py').read_text()],stdin=json.dumps({'path':remote}),bootstrap=True,timeout=300)
-            if result['exit_code']:
-                diagnostics=self.root/'diagnostics';diagnostics.mkdir(exist_ok=True,mode=0o700)
-                path=diagnostics/(wid+'-resize.json');path.write_text(json.dumps(result));path.chmod(0o600)
-                reason='Home transfer timed out' if result.get('timed_out') else 'Could not save the complete home for resizing'
-                if 'safe migration limit' in result.get('stderr',''):reason='The home exceeds the supported transfer size'
-                raise RuntimeError(reason+'; original workspace retained')
-            metadata=json.loads(result['stdout']);size_bytes=metadata['bytes']
-            if metadata.get('parts')!=(size_bytes+7_999_999)//8_000_000:raise RuntimeError('Invalid workspace transfer metadata')
-            if not 0<size_bytes<=2_000_000_000:raise RuntimeError('Workspace transfer is too large')
-            record=self.record(wid);group=self.profile('developer')['group']
-            with local.open('xb') as output:
-                local.chmod(0o600)
-                for index in range(metadata['parts']):
-                    part=remote+f'/part-{index:04d}'
-                    trusted='/var/lib/lab/home-download.part'
-                    script="import os,stat; from pathlib import Path; fd=os.open("+repr(part)+",os.O_RDONLY|os.O_NOFOLLOW); info=os.fstat(fd); assert stat.S_ISREG(info.st_mode) and info.st_uid==1000 and info.st_size<=8000000; data=os.read(fd,8000001); os.close(fd); p=Path("+repr(trusted)+"); p.unlink(missing_ok=True); p.write_bytes(data); p.chmod(0o600)"
-                    await self.root_exec(record,'python -I -c '+shlex.quote(script))
-                    data=await self.transport.read(group,record['sandbox_id'],trusted,8_000_000)
-                    if len(data)!=min(8_000_000,size_bytes-output.tell()):raise RuntimeError('Workspace transfer segment was incomplete')
-                    output.write(data)
-            if local.stat().st_size!=size_bytes:raise RuntimeError('Workspace transfer was incomplete')
-            await self.transport.call('remove_file',group,record['sandbox_id'],{'path':trusted})
-            # Only this operation's generated segments; never the source home.
-            script="import shutil; from pathlib import Path; p=Path("+repr(remote)+"); assert p.parent==Path('/tmp') and p.name.startswith('lab-home-') and not p.is_symlink(); shutil.rmtree(p)"
-            await self.root_exec(record,'python -I -c '+shlex.quote(script))
+            await self.export_home(wid,local,remote)
             await self.stop(wid)
             async with self.workspace_locks.setdefault(wid,asyncio.Lock()):
                 record=self.record(wid)
@@ -503,7 +534,40 @@ class AzureRuntime:
                 from .previews import previews
                 await previews.remove_workspace(wid)
                 return await self._start(record)
-        finally:self.resizing.discard(wid)
+        finally:
+            try:
+                if str(local) not in [self.record(wid).get(f) for f in ('home_restore','home_transfer_backup','archive_backup')]:local.unlink(missing_ok=True)
+            finally:self.resizing.discard(wid)
+
+    async def export_home(self,wid,local,remote,*,require_complete=False):
+        result=await self.execute(wid,['python','-I','-c',(ROOT/'sandbox/home_archive.py').read_text()],stdin=json.dumps({'path':remote}),bootstrap=True,timeout=300)
+        if result['exit_code']:
+            diagnostics=self.root/'diagnostics';diagnostics.mkdir(exist_ok=True,mode=0o700)
+            path=diagnostics/(wid+'-resize.json');path.write_text(json.dumps(result));path.chmod(0o600)
+            reason='Home transfer timed out' if result.get('timed_out') else 'Could not save the complete home for resizing'
+            if 'safe migration limit' in result.get('stderr',''):reason='The home exceeds the supported transfer size'
+            raise RuntimeError(reason+'; original workspace retained')
+        metadata=json.loads(result['stdout']);size_bytes=metadata['bytes']
+        if require_complete and metadata.get('skipped_external_links'):raise RuntimeError('Home contains external links; retain the original sandbox')
+        if metadata.get('parts')!=(size_bytes+7_999_999)//8_000_000:raise RuntimeError('Invalid workspace transfer metadata')
+        if not 0<size_bytes<=2_000_000_000:raise RuntimeError('Workspace transfer is too large')
+        record=self.record(wid);group=self.profile(record['kind'])['group']
+        with local.open('xb') as output:
+            local.chmod(0o600)
+            for index in range(metadata['parts']):
+                part=remote+f'/part-{index:04d}'
+                trusted='/var/lib/lab/home-download.part'
+                script="import os,stat; from pathlib import Path; fd=os.open("+repr(part)+",os.O_RDONLY|os.O_NOFOLLOW); info=os.fstat(fd); assert stat.S_ISREG(info.st_mode) and info.st_uid==1000 and info.st_size<=8000000; data=os.read(fd,8000001); os.close(fd); p=Path("+repr(trusted)+"); p.unlink(missing_ok=True); p.write_bytes(data); p.chmod(0o600)"
+                await self.root_exec(record,'python -I -c '+shlex.quote(script))
+                data=await self.transport.read(group,record['sandbox_id'],trusted,8_000_000)
+                if len(data)!=min(8_000_000,size_bytes-output.tell()):raise RuntimeError('Workspace transfer segment was incomplete')
+                output.write(data)
+        if local.stat().st_size!=size_bytes:raise RuntimeError('Workspace transfer was incomplete')
+        await self.transport.call('remove_file',group,record['sandbox_id'],{'path':trusted})
+        # Only this operation's generated segments; never the source home.
+        script="import shutil; from pathlib import Path; p=Path("+repr(remote)+"); assert p.parent==Path('/tmp') and p.name.startswith('lab-home-') and not p.is_symlink(); shutil.rmtree(p)"
+        await self.root_exec(record,'python -I -c '+shlex.quote(script))
+        return local
 
     async def backup_source(self, record):
         if not self.storage.enabled: return
@@ -518,14 +582,30 @@ class AzureRuntime:
         await self.storage.save('workspaces',record['id'],{'files':files,'kind':record['kind']})
         current = self.record(record['id']); current['last_checkpoint_at'] = time.time(); current.pop('storage_error',None); self.save(current)
 
+    async def restore_source(self, record):
+        payload=await self.storage.load('workspaces',record['id'])
+        if payload is None:raise RuntimeError('Saved source checkpoint is missing; restore was not completed')
+        files=payload.get('files',[])
+        # `backup_source` already validates this exact bounded file format.
+        from .workspace_links import checked_files
+        files=checked_files({'files':files})
+        changes=[{'path':item['path'],'before':None,'data':item['data'],'mode':0o600} for item in files]
+        result=await self.execute(record['id'],['python','-I','-c',(ROOT/'sandbox/sync_project.py').read_text()],stdin=json.dumps({'scope':'','changes':changes}),bootstrap=True,timeout=45,maximum=1_000_000)
+        if result['exit_code'] or len(json.loads(result['stdout']).get('applied',[]))!=len(changes):
+            raise RuntimeError('New workspace could not restore its source; original workspace retained')
+        record.pop('source_restore',None);self.save(record)
+
     async def maintain(self):
         while True:
             self.telemetry.sample(self)
+            self.archive.schedule()
             if time.time()-self.last_bill_check>300:
                 try:await self.refresh_bill();self.billing_error=None
                 except Exception:self.billing_error='Azure billing refresh is unavailable; local reservations remain in force.'
                 self.last_bill_check=time.time()
+            self.quick_cleanup.maintain()
             for record in self.records():
+                if record.get('cleanup_pending'):continue
                 if record['state'] in ('deleted','stopped'): continue
                 if record['kind']=='developer' and record['state']=='running' and not record.get('warm') and time.time()-record.get('activity_checked_at',0)>30:
                     try:
@@ -533,14 +613,16 @@ class AzureRuntime:
                         if remote['state']=='Running':
                             # Inspect only timestamps, not session contents. Polling
                             # itself must not keep idle compute or previews alive.
-                            script="from pathlib import Path; import json\np=Path.home()/'.config/lab/activity.json'\nprint(p.stat().st_mtime if p.is_file() else 0)"
+                            script="from pathlib import Path; import json\np=Path.home()/'.config/lab/activity.json'\nc=Path('/sys/fs/cgroup')\ndef read(name):\n try:return (c/name).read_text()\n except OSError:return ''\ncpu=dict(line.split() for line in read('cpu.stat').splitlines())\nprint(json.dumps({'activity':p.stat().st_mtime if p.is_file() else 0,'memory_peak_bytes':int(read('memory.peak') or read('memory.current') or 0),'cpu_usage_usec':int(cpu.get('usage_usec',0))}))"
                             result=await self.execute(record['id'],['python','-I','-c',script],bootstrap=True,timeout=10)
-                            at=min(float(result['stdout'].strip()),time.time())
+                            sample=json.loads(result['stdout']);at=min(float(sample['activity']),time.time())
                             current=self.record(record['id']);current['activity_checked_at']=time.time()
+                            from .workspace_usage import observe
+                            if sample['memory_peak_bytes']>0:current['usage']=observe(current.get('usage'),sample,time.time())
                             if at>current.get('last_activity_at',0):
                                 current['last_activity_at']=at
                                 from .previews import previews
-                                if time.time()-at<60:previews.renew_workspace(record['id']);self.warm.demand('developer')
+                                if time.time()-at<60:previews.renew_workspace(record['id']);self.warm.demand('developer',record.get('compute_size'))
                             self.save(current);record=current
                     except Exception:pass
                 idle=self.is_idle(record)
@@ -573,6 +655,8 @@ class AzureRuntime:
             if process.returncode is None:process.kill();await process.wait()
 
     async def close(self):
+        await self.archive.close()
+        await self.quick_cleanup.close()
         for record in self.records():
             if record['state'] in ('deleted','stopped'):continue
             try:await self.stop(record['id'],delete=record.get('disposable',False))

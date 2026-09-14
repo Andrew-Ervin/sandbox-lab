@@ -32,6 +32,34 @@ def test_uncertain_operation_and_bill_keep_reservations(tmp_path):
     assert budget.status()['billed_usd']==70
 
 
+def test_model_usage_is_separate_from_azure_admission(tmp_path):
+    path=tmp_path/'budget.sqlite';budget=AzureBudget(path)
+    cloud=budget.reserve('compute',90)
+    model=budget.reserve('model',500)
+    budget.finish(model,400)
+    pending=budget.reserve('model',200)
+    reopened=AzureBudget(path)
+    assert reopened.status()['available_usd']==10
+    assert reopened.status()['open_reservations_usd']==90
+    assert reopened.status()['model_estimated_and_reserved_usd']==600
+    assert reopened.status()['model_open_reservations_usd']==200
+    with pytest.raises(RuntimeError,match='budget'):reopened.reserve('compute',11)
+    reopened.refresh_billed(100)
+    assert reopened.status()['blocked']
+    # An Azure cutoff must not replace the provider's independent model budget.
+    reopened.reserve('model',1)
+
+
+def test_model_reconciliation_cannot_refund_azure_charges(tmp_path):
+    budget=AzureBudget(tmp_path/'budget.sqlite')
+    budget.reserve('compute',100)
+    model=budget.reserve('model',80);budget.finish(model)
+    budget.db.execute("INSERT INTO charges VALUES ('reconciled','model-reconciliation',-75,1,1)")
+    assert budget.status()['estimated_and_reserved_usd']==100
+    assert budget.status()['model_estimated_and_reserved_usd']==5
+    with pytest.raises(RuntimeError,match='budget'):budget.reserve('compute',1)
+
+
 @pytest.mark.parametrize('amount',[0,-1,float('inf'),float('nan')])
 def test_invalid_reservations_rejected(tmp_path,amount):
     budget=AzureBudget(tmp_path/'budget.sqlite')
@@ -287,3 +315,49 @@ async def test_queued_warm_role_does_not_block_other_roles(control):
     assert set(began)=={'quick','headless','developer'}
     task.cancel();await asyncio.gather(task,return_exceptions=True)
     assert all(t.done() for t in control.warm.tasks.values())
+
+@pytest.mark.asyncio
+async def test_app_only_resume_defers_editor_until_editor_open(control):
+    ws=await control.create('quick','test',disposable=True)
+    record=control.record(ws['id']);record.update(kind='developer',editor_prepared=False);control.save(record)
+    control.install_ide=AsyncMock()
+    await control.start(ws['id'],editor=False)
+    control.install_ide.assert_not_awaited()
+    await control.start(ws['id'],editor=True)
+    control.install_ide.assert_awaited_once()
+    await control.start(ws['id'],editor=True)
+    assert control.install_ide.await_count==1
+
+@pytest.mark.asyncio
+async def test_command_result_rate_limit_retries_read_without_relaunch(control,monkeypatch):
+ record={'id':'poll-test','kind':'quick','name':'poll','state':'running','lease_until':time.time()+60,'sandbox_id':'sid'}
+ control.save(record)
+ control.root_exec=AsyncMock()
+ control.transport.read=AsyncMock(side_effect=[AzureError('read',404),AzureError('read',429),b'{"exit_code":0,"stdout":"ok"}'])
+ control.transport.call=AsyncMock(side_effect=AzureError('remove_file',429))
+ sleep=AsyncMock();monkeypatch.setattr('backend.azure_runtime.asyncio.sleep',sleep)
+ result=await control._execute(record['id'],['python','-c','print(1)'])
+ assert result['stdout']=='ok'
+ control.root_exec.assert_awaited_once()
+ assert control.transport.read.await_count==3
+ assert [c.args[0] for c in sleep.await_args_list]==[.4,5]
+
+@pytest.mark.asyncio
+async def test_resize_blocks_commands_during_start_and_releases_after_failure(control):
+ record={'id':'resize-race','kind':'developer','name':'race','state':'stopped','compute_size':'light','sandbox_id':'sid'}
+ control.save(record)
+ async def start(wid):
+  assert wid in control.resizing
+  with pytest.raises(RuntimeError,match='changing'):
+   await control.execute(wid,['echo','cannot run'])
+  raise RuntimeError('start failed')
+ control.start=start
+ with pytest.raises(RuntimeError,match='start failed'):await control.resize(record['id'],'balanced')
+ assert record['id'] not in control.resizing
+
+@pytest.mark.asyncio
+async def test_malformed_completed_result_still_cleans_operation(control):
+ record={'id':'bad-result','kind':'quick','name':'bad','state':'running','lease_until':time.time()+60,'sandbox_id':'sid'}
+ control.save(record);control.root_exec=AsyncMock();control.transport.read=AsyncMock(return_value=b'not json');control.transport.call=AsyncMock()
+ with pytest.raises(ValueError):await control._execute(record['id'],['echo','hi'])
+ assert control.transport.call.await_count==2

@@ -1,5 +1,7 @@
 """Root-owned supervisor: execute one bounded request as uid 1000, never root."""
 import ctypes
+import fcntl
+import time
 import json
 import os
 from pathlib import Path
@@ -50,11 +52,35 @@ def execute(request):
                 'exit_code': proc.returncode, 'timed_out': timed_out}
 
 
+def reconcile(folder, now=None):
+    """Reclaim abandoned operations, but never files owned by a live supervisor."""
+    now = time.time() if now is None else now
+    for path in list(folder.glob('*.request'))+list(folder.glob('*.result'))+list(folder.glob('*.tmp')):
+        ident=path.stem
+        if len(ident)!=32 or any(c not in '0123456789abcdef' for c in ident):continue
+        try:
+            if path.stat().st_mtime > now-3600:continue
+        except FileNotFoundError:continue
+        with (folder/(ident+'.lock')).open('a') as lock:
+            try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError:continue
+            for suffix in ('request','result','tmp'):
+                (folder/(ident+'.'+suffix)).unlink(missing_ok=True)
+        (folder/(ident+'.lock')).unlink(missing_ok=True)
+
+
+def supervise(ident, folder):
+    reconcile(folder)
+    with (folder/(ident+'.lock')).open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX)
+        request = json.loads((folder / (ident+'.request')).read_text())
+        try: result = execute(request)
+        except Exception: result = {'exit_code': 125, 'stdout': '', 'stderr': 'Sandbox supervisor failed'}
+        temp = folder / (ident+'.tmp'); temp.write_text(json.dumps(result)); temp.replace(folder / (ident+'.result'))
+    (folder/(ident+'.lock')).unlink(missing_ok=True)
+
+
 if __name__ == '__main__':
     ident = sys.argv[1]
     if len(ident) != 32 or any(c not in '0123456789abcdef' for c in ident): raise ValueError('Invalid operation')
-    folder = Path('/var/lib/lab/requests')
-    request = json.loads((folder / (ident+'.request')).read_text())
-    try: result = execute(request)
-    except Exception: result = {'exit_code': 125, 'stdout': '', 'stderr': 'Sandbox supervisor failed'}
-    temp = folder / (ident+'.tmp'); temp.write_text(json.dumps(result)); temp.replace(folder / (ident+'.result'))
+    supervise(ident, Path('/var/lib/lab/requests'))

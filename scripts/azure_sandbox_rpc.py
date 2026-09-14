@@ -10,6 +10,14 @@ _credential = None
 _blob_clients = {}
 
 
+def workspace_egress(config, developer=False):
+    from azure.containerapps.sandbox import EgressPolicy, EgressRule, EgressRuleMatch, EgressRuleAction
+    rules=[]
+    if developer and config.get('workspace_mcp_learn') is True:
+        rules=[EgressRule(name='microsoft-learn',match=EgressRuleMatch(host='learn.microsoft.com',path='/api/mcp',methods=['GET','POST','DELETE']),action=EgressRuleAction(type='Allow'))]
+    return EgressPolicy(default_action='Deny',traffic_inspection='Full',rules=rules)
+
+
 def blob_invoke(config, action, args):
     from azure.storage.blob import BlobServiceClient, ContentSettings
     from azure.core import MatchConditions
@@ -27,6 +35,9 @@ def blob_invoke(config, action, args):
         raw = blob.download_blob(etag=info.etag, match_condition=MatchConditions.IfNotModified).readall()
         if len(raw) > 70_000_000: raise ValueError('Checkpoint exceeds limit')
         return {'data':base64.b64encode(raw).decode(), 'etag':info.etag}
+    if action == 'blob_delete':
+        blob.delete_blob(delete_snapshots='include')
+        return {'deleted':True}
     if action == 'blob_put':
         raw = base64.b64decode(args['data'], validate=True)
         if len(raw) > 70_000_000: raise ValueError('Checkpoint exceeds limit')
@@ -69,16 +80,29 @@ def invoke(data):
     with contextlib.nullcontext(client(config, data['group'])) as group:
         action = data['action']
         args = data.get('args', {})
+        if action in ('builtin_execute','builtin_delete'):
+            from builtin_session_rpc import execute
+            return execute(config, _credential, {**args,'delete':action=='builtin_delete'})
+        if action == 'service_inventory':
+            from azure_service_inventory import inventory
+            return inventory(config, _credential)
         if action.startswith('blob_'): return blob_invoke(config, action, args)
         if action == 'delete_snapshot':group.begin_delete_snapshot(args['snapshot_id'],polling_timeout=90).result();return {}
         if action == 'list':
             return [dataclasses.asdict(s) for s in group.list_sandboxes()]
         if action == 'create':
             # No implicit Allow default, public app ports, registry imports, or volumes.
-            sb = group.begin_create_sandbox(**args, egress_policy=EgressPolicy(default_action='Deny', traffic_inspection='Full'),
+            sb = group.begin_create_sandbox(**args, egress_policy=workspace_egress(config,args.get('labels',{}).get('lab-kind')=='developer'),
                                             polling_timeout=180).result()
             return dataclasses.asdict(sb.get())
         sb = group.get_sandbox_client(data['sandbox_id'])
+        if action == 'workspace_mcp_policy':
+            current=sb.get()
+            if current.labels.get('lab-kind')!='developer':raise ValueError('MCP policy is only for developer workspaces')
+            old=sb.get_egress_policy()
+            if old.default_action!='Deny' or old.traffic_inspection!='Full' or old.host_rules or any(rule.name!='microsoft-learn' for rule in old.rules):
+                raise ValueError('Review existing egress policy before replacing it')
+            return dataclasses.asdict(sb.set_egress_policy(workspace_egress(config,True)))
         if action == 'get': return dataclasses.asdict(sb.get())
         if action == 'snapshot': return dataclasses.asdict(sb.begin_create_snapshot(polling_timeout=180).result())
         if action == 'exec': return dataclasses.asdict(sb.exec(args['command']))

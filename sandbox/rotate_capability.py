@@ -5,7 +5,7 @@ from pathlib import Path
 def rotate(data,home=None):
     folder=(home or Path.home())/'.config/lab'
     if not folder.is_dir() or not (folder/'token').is_file():raise ValueError('Workspace model setup is required')
-    for name,value in [('token',data['token']),('capability.json',json.dumps({'expires':data['expires'],'model':data['model']}))]:
+    for name,value in [('token',data['token']),('capability.json',json.dumps({'expires':data['expires'],'model':data['model'],'models':data.get('models',[data['model']])}))]:
         fd,temp=tempfile.mkstemp(prefix='.renew-',dir=folder)
         try:
             with os.fdopen(fd,'w') as f:f.write(value);f.flush();os.fsync(f.fileno())

@@ -66,14 +66,28 @@ class AzureStorage:
                 self.db.execute('COMMIT')
             except BaseException:
                 self.db.execute('ROLLBACK'); raise
-            # Failed/ambiguous writes keep the old ETag. A subsequent conditional
-            # write fails safely, preserving both remote versions for review.
-            result = await self.runtime.transport.call('blob_put','lab-quick',args={
-                'key':key, 'data':base64.b64encode(raw).decode(), 'etag':previous.get('etag')})
+            try:
+                result = await self.runtime.transport.call('blob_put','lab-quick',args={
+                    'key':key, 'data':base64.b64encode(raw).decode(), 'etag':previous.get('etag')})
+            except BaseException:
+                # Observe the latest remote ETag before a later, explicit save.
+                # Never replay an ambiguous write automatically.
+                self.index.pop(key,None);self.flush();raise
             self.index[key] = {'etag':result['etag'],'sha256':digest,'bytes':len(raw),'saved_at':time.time()}
             self.flush()
+
+    async def delete(self,kind,identity):
+        if not self.enabled:raise RuntimeError('Cloud storage is unavailable for deletion')
+        key=self.key(kind,identity)
+        async with self.locks.setdefault(key,asyncio.Lock()):
+            try:await self.runtime.transport.call('blob_delete','lab-quick',args={'key':key})
+            except AzureError as error:
+                if error.status_code!=404:raise
+            self.index.pop(key,None);self.flush()
 
     def status(self):
         return {'enabled':self.enabled, 'provider':'Azure Blob', 'tier':'Standard Hot LRS',
                 'checkpoints':len(self.index), 'current_bytes':sum(x.get('bytes',0) for x in self.index.values()),
+                'archive_after_days':self.runtime.config.get('archive_after_days'), 'home_archive_max_bytes':600_000_000,
+                'archived_workspaces':sum(bool(r.get('cold_archive')) and not r.get('sandbox_id') for r in self.runtime.records()),
                 'version_retention_days':7, 'weekly_upload_limit_bytes':2_000_000_000, 'credentials_in_sandboxes':False}

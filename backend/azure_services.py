@@ -17,6 +17,7 @@ _packages = None
 def packages():
     global _packages
     if _packages is None:
+        os.environ.setdefault('LAB_EDITOR_MARKETPLACE', 'true')
         os.environ['PACKAGE_CACHE'] = str(STATE/'azure-runtime/package-cache')
         os.environ['PACKAGE_POLICY'] = str(ROOT/'infra/packages.json')
         from sandbox import package_gateway
@@ -25,11 +26,15 @@ def packages():
     return _packages
 
 
-def model_reservation(runtime, body):
+def model_reservation(runtime, body, catalog_version=None):
     prices = runtime.config.get('model_prices', {})
     from .config import MODEL
-    if prices.get('model') != MODEL or not prices.get('prompt') or not prices.get('completion'):
-        raise RuntimeError('Verify current model prices before enabling Azure coding calls.')
+    selected=body.get('model',MODEL)
+    from .workspace_models import price
+    try:prices=price(selected,catalog_version) if catalog_version else price(selected)
+    except RuntimeError:
+        if prices.get('model')!=selected or not prices.get('prompt') or not prices.get('completion'):
+            raise RuntimeError('Verify current prices for the selected model before calling it.')
     # UTF-8 bytes bound input tokens conservatively; include protocol overhead.
     field = 'max_output_tokens' if 'max_output_tokens' in body else 'max_tokens'
     maximum = min(32768, int(body.get(field, 32768)))
@@ -37,7 +42,7 @@ def model_reservation(runtime, body):
     body[field] = maximum
     # Cover approved server-side search as well as text inference.
     search = .10 if body.get('max_tool_calls') else 0
-    return (len(json.dumps(body).encode())+8192)*float(prices['prompt']) + maximum*float(prices['completion']) + .05 + search
+    return (len(json.dumps(body).encode())+8192)*float(prices['prompt']) + maximum*float(prices['completion']) + .05 + search + float(prices.get('request',0))
 
 
 async def serve(runtime, record, ready=None):
@@ -49,11 +54,13 @@ async def serve(runtime, record, ready=None):
         model_client = None
         if record['kind'] == 'developer':
             from sandbox import gateway
+            from .workspace_models import resolve
+            gateway.catalog_resolver=resolve
             await stack.enter_async_context(gateway.lifespan(gateway.app))
             model_client = await stack.enter_async_context(httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway.app), base_url='http://models', timeout=240))
         url = record['bridge_url'].replace('https://','wss://')+'/services'
         async with connect(url, additional_headers={'Authorization':'Bearer '+record['bridge_token']}, proxy=None,
-                           max_size=3_000_000, max_queue=8, compression=None) as connection:
+                           max_size=20_000_000, max_queue=8, compression=None) as connection:
             acknowledgement = json.loads(await asyncio.wait_for(connection.recv(), 15))
             if acknowledgement != {'type': 'ready'}: raise RuntimeError('Sandbox service connection was not accepted')
             if ready:ready.set()
@@ -74,40 +81,63 @@ async def serve(runtime, record, ready=None):
                                 raw=base64.b64decode(request.get('body',''),validate=True)
                                 if len(raw)>16000:raise ValueError('Gallery query too large')
                                 response=await package_client.post(path,content=raw,headers={'content-type':'application/json'})
-                            elif request['method'] != 'GET' or request.get('body') or not re.match(r'^/(python/|npm/|cargo/|go/|nuget/|julia/|artifact/|vscode/assets/)',path):
+                            elif (request['method'] != 'GET' and not (request['method']=='HEAD' and re.fullmatch(r'/artifact/[a-f0-9]{64}(?:/[^/?]+)?',path))) or request.get('body') or not re.match(r'^/(python/|npm/|cargo/|go/|nuget/|julia/|artifact/|vscode/assets/)',path):
                                 raise ValueError('Package request denied')
-                            else:response = await package_client.get(path)
+                            else:response = await package_client.request(request['method'],path)
+                            if response.status_code>=400:runtime.telemetry.event('package',record['id'],'package_request_failed',error=f'Package gateway HTTP {response.status_code}')
                         elif request['service'] == 'model' and model_client:
-                            if (request['method'],path) not in (('POST','/v1/chat/completions'),('POST','/v1/responses'),('POST','/v1/messages'),('GET','/v1/models')): raise ValueError('Model route denied')
+                            if (request['method'],path) not in (('POST','/v1/audio/transcriptions'),('POST','/v1/chat/completions'),('POST','/v1/responses'),('POST','/v1/messages'),('GET','/v1/models'),('GET','/v1/usage')): raise ValueError('Model route denied')
                             raw = base64.b64decode(request['body'], validate=True)
-                            if len(raw)>2_000_000: raise ValueError('Model request too large')
+                            if len(raw)>(13_334_360 if path=='/v1/audio/transcriptions' else 2_000_000): raise ValueError('Model request too large')
                             # The existing gateway validates expiry/signature. Also
                             # bind this reverse connection to exactly its workspace.
                             from starlette.requests import Request
                             authorization = request.get('authorization','')
                             auth = gateway.authorize(Request({'type':'http','headers':[(b'authorization',authorization.encode())]}))
                             if auth['workspace'] != record['id']: raise ValueError('Workspace capability mismatch')
-                            if path=='/v1/models':
-                                from .config import MODEL
-                                response=httpx.Response(200,json={'object':'list','models':[],'data':[{'id':MODEL,'object':'model','owned_by':'lab'}]})
+                            if path=='/v1/usage':
+                                from .model_usage import ledger,schedule_reconciliation
+                                schedule_reconciliation(record['owner'])
+                                response=httpx.Response(200,json=ledger().summary(record['owner']))
                                 await send({'type':'headers','status':200,'content_type':'application/json'})
                                 await send({'type':'body','data':base64.b64encode(response.content).decode()});await send({'type':'end'});return
-                            runtime.touch(record['id']);runtime.warm.demand('developer')
+                            if path=='/v1/models':
+                                models=auth.get('models',[auth['model']])
+                                response=httpx.Response(200,json={'object':'list','models':[],'data':[{'id':item,'object':'model','owned_by':'lab'} for item in models]})
+                                await send({'type':'headers','status':200,'content_type':'application/json'})
+                                await send({'type':'body','data':base64.b64encode(response.content).decode()});await send({'type':'end'});return
+                            runtime.touch(record['id']);runtime.warm.demand('developer',record.get('compute_size'))
                             runtime.active_commands[record['id']]=runtime.active_commands.get(record['id'],0)+1
                             model_active=True
                             from .previews import previews
                             previews.renew_workspace(record['id'])
+                            if path=='/v1/audio/transcriptions':
+                                audio=json.loads(raw)
+                                gateway.prepare_transcription(audio)
+                                # The dedicated gateway performs endpoint privacy checks
+                                # before sending audio. Do not route it through chat.
+                                response=await model_client.post(path,json=audio,headers={'Authorization':authorization})
+                                await send({'type':'headers','status':response.status_code,'content_type':'application/json'})
+                                await send({'type':'body','data':base64.b64encode(response.content).decode()});await send({'type':'end'});return
                             protocol = path.rsplit('/', 1)[-1]
-                            body = gateway.prepare_body(json.loads(raw)) if protocol == 'completions' else gateway.prepare_native(json.loads(raw), protocol)
-                            charge = runtime.budget.reserve('model',model_reservation(runtime,body))
+                            body = gateway.prepare_body(json.loads(raw),auth) if protocol == 'completions' else gateway.prepare_native(json.loads(raw), protocol,auth)
+                            charge = runtime.budget.reserve('model',model_reservation(runtime,body,auth.get('catalog')))
                             response = await model_client.post(path,json=body,headers={'Authorization':authorization})
+                            if response.status_code<300:
+                                try:
+                                    from .model_usage import ledger
+                                    ledger().record(ident,record['owner'],body['model'],protocol,response.content)
+                                except Exception:
+                                    runtime.telemetry.event('model',record['id'],'usage_record_failed',error='Usage accounting unavailable')
                         else: raise ValueError('Service denied')
                         if len(response.content)>250_000_000: raise ValueError('Service response too large')
-                        await send({'type':'headers','status':response.status_code,'content_type':response.headers.get('content-type','application/octet-stream')})
+                        await send({'type':'headers','status':response.status_code,'content_type':response.headers.get('content-type','application/octet-stream'),'content_length':int(response.headers['content-length']) if response.headers.get('content-length','').isdigit() else None})
                         for offset in range(0,len(response.content),65536):
                             await send({'type':'body','data':base64.b64encode(response.content[offset:offset+65536]).decode()})
                         await send({'type':'end'})
-                    except Exception:
+                    except Exception as error:
+                        detail=str(error.detail) if hasattr(error,'detail') else str(error) if isinstance(error,(ValueError,RuntimeError)) else type(error).__name__
+                        runtime.telemetry.event(record['kind'],record['id'],'service_request_failed',error=detail[:250])
                         await send({'type':'headers','status':503,'content_type':'application/json'})
                         await send({'type':'body','data':base64.b64encode(b'{"error":{"message":"Broker service unavailable or request denied. Check runtime status and budget."}}').decode()})
                         await send({'type':'end'})

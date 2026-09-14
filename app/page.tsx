@@ -1,6 +1,4 @@
 'use client';
-import {AzureRuntimePanel} from '@/components/azure-runtime-panel';
-import { OperationsPanel } from '@/components/operations-panel';
 import {
   useCallback,
   useEffect,
@@ -12,6 +10,9 @@ import {
 } from 'react';
 import { ChatKit, useChatKit } from '@openai/chatkit-react';
 import { CodingSessionStrip } from '@/components/coding-session-strip';
+import { RecoveryChat } from '@/components/recovery-chat';
+import { loadChatKit } from '@/lib/chatkit-loader';
+import { ThreadNavigation } from '@/lib/thread-navigation';
 import { ChatTransport } from '@/lib/chat-transport';
 import {
   Box,
@@ -48,6 +49,12 @@ import {
 } from '@/components/ui/sheet';
 import { LibraryActions, ArchiveNotice } from '@/components/library-actions';
 import { ProjectSidebar, ChatRow } from '@/components/project-sidebar';
+const OperationsPanel = lazy(() =>
+  import('@/components/operations-panel').then((m) => ({ default: m.OperationsPanel })),
+);
+const AzureRuntimePanel = lazy(() =>
+  import('@/components/azure-runtime-panel').then((m) => ({ default: m.AzureRuntimePanel })),
+);
 const ProjectsView = lazy(() =>
   import('@/components/projects-view').then((m) => ({
     default: m.ProjectsView,
@@ -159,15 +166,8 @@ export default function Home() {
   const [boot, setBoot] = useState<Boot | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
-    const script = document.createElement('script');
-    script.src =
-      'https://cdn.platform.openai.com/deployments/chatkit/chatkit.js';
-    script.async = true;
-    script.onerror = () =>
-      setError(
-        'Chat could not load. Check your connection and reload.',
-      );
-    document.head.appendChild(script);
+    let active = true;
+    void loadChatKit().catch((e: Error) => { if (active) setError(e.message); });
     fetch('/api/bootstrap', { method: 'POST' })
       .then((r) => {
         if (!r.ok && r.status!==401) throw Error('Could not connect. Please retry.');
@@ -176,7 +176,7 @@ export default function Home() {
       .then(setBoot)
       .catch((e) => setError(e.message));
     return () => {
-      script.remove();
+      active = false;
     };
   }, []);
   if(boot?.signin_required)return <div className="connecting"><Box size={30}/><h1>Welcome back</h1><p>Sign in to open your chats, projects and workspaces.</p><Button onClick={()=>window.location.assign(boot.login_url||'/api/auth/login')}>Sign in with Microsoft</Button></div>;
@@ -197,17 +197,37 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
   const { openPreview: showPreviewPane } = panes;
   const [chatReady, setChatReady] = useState(false);
   const [chatSlow, setChatSlow] = useState(false);
-  useEffect(() => {
-    if (chatReady) { setChatSlow(false); return; }
-    const timer = window.setTimeout(() => setChatSlow(true), 30000);
-    return () => window.clearTimeout(timer);
-  }, [chatReady]);
+  const [recoveryChat, setRecoveryChat] = useState(false);
+  const [chatEpoch, setChatEpoch] = useState(0);
+  const recovering = useRef(false);
   const [threadLoading, setThreadLoading] = useState(false);
+  useEffect(() => {
+    if (chatReady && !threadLoading) { setChatSlow(false); return; }
+    const timer = window.setTimeout(() => { setChatSlow(true); setRecoveryChat(true); }, 8000);
+    return () => window.clearTimeout(timer);
+  }, [chatReady, threadLoading, chatEpoch]);
   const transport = useRef(new ChatTransport());
   const loadedThread = useRef<string | null>(null);
   const lastJobSync = useRef('');
   const csrf = useRef(boot.csrf);
   const renewing = useRef<Promise<void> | null>(null);
+  const [signinRequired, setSigninRequired] = useState(false);
+  const reconnect = useCallback(async () => {
+    const response = await fetch('/api/bootstrap', {method:'POST'});
+    if (!response.ok) { setSigninRequired(true); return; }
+    const next = await response.json() as Boot;
+    // Never display another account's cached data after switching identity.
+    if (next.user?.id !== boot.user?.id) { window.location.reload(); return; }
+    csrf.current = next.csrf;
+    setSigninRequired(false);
+  }, [boot.user?.id]);
+  useEffect(() => {
+    if (!signinRequired) return;
+    const resume = () => { void reconnect(); };
+    window.addEventListener('focus', resume);
+    const timer = window.setInterval(resume, 15000);
+    return () => { window.removeEventListener('focus', resume); window.clearInterval(timer); };
+  }, [signinRequired, reconnect]);
   const sessionFetch = useCallback(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const send = () => {
@@ -224,12 +244,14 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
               .catch(() => null)) as { detail?: string } | null)
           : null;
       const staleCsrf = rejection?.detail === 'Invalid CSRF token';
-      if(response.status===401 && boot.auth==='entra'){window.location.assign('/');throw Error('Please sign in again.');}
+      if(response.status===401 && boot.auth==='entra'){setSigninRequired(true);throw Error('Sign in again using the reconnect notice. Your workspace remains open.');}
       if (response.status === 401 || staleCsrf) {
         renewing.current ??= fetch('/api/bootstrap', { method: 'POST' })
           .then(async (r) => {
             if (!r.ok) throw Error('Could not reconnect to the lab.');
-            csrf.current = ((await r.json()) as Boot).csrf;
+            const next = (await r.json()) as Boot;
+            if (next.user?.id !== boot.user?.id) { window.location.reload(); throw Error('Account changed.'); }
+            csrf.current = next.csrf;
           })
           .finally(() => {
             renewing.current = null;
@@ -285,6 +307,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
   const previewRequest = useRef(0);
   const lastActivity = useRef(Date.now());
   const previewElement = useRef<HTMLIFrameElement>(null);
+  const editorUrls = useRef(new Map<string, string>());
   const [statusStale, setStatusStale] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceName, setWorkspaceName] = useState('dev');
@@ -294,7 +317,9 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
   const filesRequest = useRef(0);
   const [projectId, setProjectId] = useState<string | null>(null);
   const streaming = useRef(false);
-  const threadSelection = useRef(0);
+  const navigation = useRef(new ThreadNavigation());
+  const navigating = useRef(false);
+  const loadCompletion = useRef<{ id: string | null; resolve: () => void; reject: (error: Error) => void } | null>(null);
   const threadRef = useRef(thread);
   threadRef.current = thread;
   const [error, setError] = useState('');
@@ -372,7 +397,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
       const request = ++previewRequest.current;
       showPreviewPane();
       lastActivity.current = Date.now();
-      setPreview({ title, endpoint, workspace, ide });
+      setPreview({ title, endpoint, workspace, ide, url: ide ? editorUrls.current.get(endpoint) : undefined });
       if (preview?.endpoint !== endpoint) {
         setPreviewFull(view !== 'chat' || Boolean(workspace));
         setFitPreview(true);
@@ -399,6 +424,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
             );
           data = { url: result.url };
         } else data = await api<{ url: string }>(endpoint + '?resolve=1');
+        if (ide) editorUrls.current.set(endpoint, data.url);
         if (request === previewRequest.current)
           setPreview((current) =>
             current?.endpoint === endpoint
@@ -534,7 +560,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
       },
     },
   );
-  const startWorkspace = async (name: string, compute_size='balanced') => {
+  const startWorkspace = async (name: string, compute_size='light') => {
     setStarting(true);
     setError('');
     try {
@@ -695,15 +721,22 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
           );
       }
     },
-    onReady: () => setChatReady(true),
+    onReady: () => {
+      setChatReady(true);
+      if (recovering.current) { recovering.current = false; selectThread(thread); }
+    },
     onThreadLoadStart: ({ threadId }) => {
-      if (threadId !== loadedThread.current) setThreadLoading(true);
+      if (!navigating.current && threadId !== loadedThread.current) setThreadLoading(true);
     },
     onThreadLoadEnd: ({ threadId }) => {
+      if (loadCompletion.current?.id === threadId) loadCompletion.current.resolve();
+      if (threadId !== navigation.current.requested) return;
       loadedThread.current = threadId;
-      setThreadLoading(false);
+      if (!navigating.current) setThreadLoading(false);
     },
     onThreadChange: ({ threadId }) => {
+      if (recoveryChat) return;
+      if (navigating.current && threadId !== navigation.current.requested) return;
       setThread(threadId);
       void refresh();
     },
@@ -716,13 +749,14 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
       void refresh();
     },
     onError: ({ error }) => {
-      setThreadLoading(false);
+      loadCompletion.current?.reject(error);
+      if (!navigating.current) setThreadLoading(false);
       setError(error.message);
     },
   });
   usePolling(
     async () => {
-      if (streaming.current || transport.current.busy(thread)) return;
+      if (!chatReady || threadLoading || streaming.current || transport.current.busy(thread)) return;
       const job = status?.jobs.find((j) => j.thread_id === thread);
       if (!job) return;
       const key = job.id + ':' + job.status;
@@ -737,17 +771,50 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
     4000,
     { enabled: Boolean(thread) && view === 'chat' },
   );
+  useEffect(() => {
+    if (!recoveryChat) return;
+    navigation.current.version++;
+    loadCompletion.current?.reject(Error('Using text view'));
+    loadCompletion.current=null;
+    navigating.current=false;
+    recovering.current=false;
+    setThreadLoading(false);
+  }, [recoveryChat]);
   const selectThread = (id: string | null) => {
-    const selection = ++threadSelection.current;
+    navigating.current = true;
     filesRequest.current++;
     setFiles([]);
     setProjectId(null);
-    setThreadLoading(Boolean(id) && id !== loadedThread.current);
+    setThreadLoading(true);
     streaming.current = false;
     setView('chat');
     setPreview(null);
     setThread(id);
-    void transport.current.detach().then(() => {if (selection === threadSelection.current) return chat.setThreadId(id);}).catch((e: Error) => {setThreadLoading(false);setError(e.message);});
+    if (recoveryChat) { navigating.current=false; setThreadLoading(false); return; }
+    void navigation.current.select(id, async (target) => {
+      await transport.current.detach();
+      if (chatReady && target === loadedThread.current) return;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let completion: NonNullable<typeof loadCompletion.current>;
+      const loaded = new Promise<void>((resolve, reject) => {
+        completion = { id: target, resolve, reject };
+        loadCompletion.current = completion;
+        timer = setTimeout(() => reject(Error('Conversation loading timed out. Retry chat to reconnect.')), 25000);
+      });
+      try {
+        await Promise.all([chat.setThreadId(target).then(() => {
+          if (target === null && loadCompletion.current === completion) { loadedThread.current = null; completion.resolve(); }
+        }), loaded]);
+      } finally {
+        clearTimeout(timer);
+        if (loadCompletion.current === completion!) loadCompletion.current = null;
+      }
+    }, (error) => {
+      navigating.current = Boolean(error);
+      setThreadLoading(Boolean(error));
+      if (error) { setError(error.message); setChatSlow(true); }
+      else loadedThread.current = id;
+    });
   };
   const openProject = (id: string | null) => {
     setSelectedProject(id);
@@ -972,6 +1039,7 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
             )}
           </SidebarContent>
           <SidebarFooter className="p-4">
+            {signinRequired && <div role="alert"><p>Sign in again to reconnect. Your workspace stays open.</p><a href="/api/auth/login?fresh=1" target="_blank" rel="noopener noreferrer">Sign in with Microsoft</a><Button variant="ghost" onClick={() => void reconnect()}>Reconnect</Button></div>}
             {boot.user?.admin!==false && <Button
               variant="ghost"
               className="justify-start"
@@ -1104,8 +1172,8 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
                 />
               </Suspense>
             )}
-            {view === 'azure-runtime' && <AzureRuntimePanel sessionFetch={sessionFetch}/>}
-            {view === 'operations' && <OperationsPanel provider={status?.provider} sessionFetch={sessionFetch}/>}
+            {view === 'azure-runtime' && <Suspense fallback={<PanelLoading />}><AzureRuntimePanel sessionFetch={sessionFetch}/></Suspense>}
+            {view === 'operations' && <Suspense fallback={<PanelLoading />}><OperationsPanel provider={status?.provider} sessionFetch={sessionFetch}/></Suspense>}
             {view === 'policy' && (
               <Suspense fallback={<PanelLoading />}>
                 <PackagePolicy sessionFetch={sessionFetch} />
@@ -1115,39 +1183,50 @@ function Lab({ boot, loadError }: { boot: Boot; loadError: string }) {
               className="conversation"
               style={{ display: view === 'chat' ? 'flex' : 'none' }}
             >
+              <div className="flex justify-end px-3">{!recoveryChat && <Button variant="ghost" size="sm" onClick={() => setRecoveryChat(true)}>Use text view</Button>}</div>
               <ArchiveNotice
                 chat={threads.find((t) => t.id === thread)}
                 project={projects.find((p) => p.id === threadProject)}
               />
               <div
                 className="chat-stage"
-                aria-busy={!chatReady || threadLoading}
+                aria-busy={!recoveryChat && (!chatReady || threadLoading)}
               >
-                {(!chatReady || threadLoading) && (
-                  <div className="chat-loading" role="status">
+                {recoveryChat && <RecoveryChat thread={thread} sessionFetch={sessionFetch} onThread={setThread} onRefresh={() => { void refresh(); }} onFullView={() => {loadedThread.current=null;navigation.current=new ThreadNavigation();setRecoveryChat(false);setChatReady(false);setChatSlow(false);recovering.current=true;setChatEpoch(n=>n+1);}} />}
+                {!recoveryChat && (!chatReady || threadLoading) && (
+                  <div className="chat-loading" data-transition={threadLoading || undefined} role="status">
                     <span className="skeleton-line wide" />
                     <span className="skeleton-line" />
                     <span className="skeleton-card" />
                     <p>
                       <LoaderCircle size={14} className="spin" />
-                      {threadLoading
-                        ? 'Loading conversation…'
-                        : chatSlow ? 'Chat did not finish loading.' : 'Preparing chat…'}
+                      {chatSlow ? 'Chat did not finish loading.' : threadLoading ? 'Loading conversation…' : 'Preparing chat…'}
                     </p>
-                    {chatSlow && !threadLoading && <div className="space-y-3 text-sm text-muted-foreground">
+                    {chatSlow && <div className="space-y-3 text-sm text-muted-foreground">
                       <p>The chat service may be unavailable or blocked by the browser. Your saved chats are retained; Apps, workspaces and Operations remain available.</p>
-                      <Button variant="outline" onClick={() => location.reload()}>Reload chat</Button>
+                      <Button variant="outline" onClick={() => {
+                        loadCompletion.current?.reject(Error('Chat reconnecting'));
+                        loadCompletion.current = null;
+                        navigation.current.version++;
+                        navigation.current = new ThreadNavigation();
+                        loadedThread.current = null;
+                        navigating.current = false;
+                        recovering.current = true;
+                        setChatReady(false); setThreadLoading(false); setChatSlow(false);
+                        void transport.current.detach();
+                        void loadChatKit().then(() => setChatEpoch((n) => n + 1)).catch((e: Error) => setError(e.message));
+                      }}>Retry chat</Button>
                     </div>}
                   </div>
                 )}
+                <div inert={!chatReady || threadLoading} aria-hidden={!chatReady || threadLoading || undefined} style={{ height: '100%', width: '100%', minWidth: 0, display: recoveryChat ? 'none' : 'block' }}>
                 <ChatKit
+                  key={chatEpoch}
                   control={chat.control}
                   className="chat-surface"
-                  style={{
-                    visibility:
-                      !chatReady || threadLoading ? 'hidden' : 'visible',
-                  }}
+                  style={{ opacity: !chatReady || threadLoading ? 0 : 1, transition: !chatReady || threadLoading ? 'none' : 'opacity 140ms ease-out' }}
                 />
+                </div>
               </div>
               <CodingSessionStrip
                 thread={view === 'chat' ? thread : null}
